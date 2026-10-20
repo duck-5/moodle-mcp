@@ -4,7 +4,9 @@ Loads environment variables from .env or moodle_test_credentials.env if present.
 """
 
 import os
+import re
 from pathlib import Path
+from typing import Dict, Optional
 from dotenv import load_dotenv
 
 # Try loading from multiple env file locations
@@ -43,11 +45,41 @@ TIMEZONE = os.getenv("TIMEZONE", "Asia/Jerusalem")
 PANOPTO_URL = os.getenv("PANOPTO_URL", "https://tau.cloud.panopto.eu").rstrip("/")
 SCRAPE_PANOPTO = os.getenv("SCRAPE_PANOPTO", "0") in ("1", "true", "True")
 
-# Persistent Session & Cache Storage Locations
-SESSION_DIR = Path.home() / ".moodle_mcp"
-SESSION_FILE = Path(os.getenv("MOODLE_SESSION_FILE", str(SESSION_DIR / "session.json")))
-CACHE_FILE = Path(os.getenv("MOODLE_CACHE_FILE", str(SESSION_DIR / "cache.json")))
-SAVED_DATA_FILE = Path(os.getenv("MOODLE_SAVED_DATA_FILE", str(SESSION_DIR / "saved_data.json")))
+# Persistent Session & Cache Storage Base Directory
+SESSION_DIR = Path(os.getenv("MOODLE_STORAGE_DIR", str(Path.home() / ".moodle_mcp")))
+PROFILES_DIR = SESSION_DIR / "profiles"
+
+# Active User Profile Name (defaults to MOODLE_PROFILE, then MOODLE_USERNAME, then 'default')
+MOODLE_PROFILE = os.getenv("MOODLE_PROFILE", MOODLE_USERNAME or "default").strip() or "default"
+
+
+def sanitize_profile_name(profile: Optional[str] = None) -> str:
+    """Sanitizes a profile or username into a safe directory name."""
+    raw = (profile or os.getenv("MOODLE_PROFILE") or MOODLE_PROFILE or MOODLE_USERNAME or "default").strip()
+    sanitized = re.sub(r"[^a-zA-Z0-9_.-]", "_", raw)
+    return sanitized or "default"
+
+
+def get_profile_dir(profile: Optional[str] = None) -> Path:
+    """Returns the isolated storage directory for a given user profile."""
+    return PROFILES_DIR / sanitize_profile_name(profile)
+
+
+def get_profile_paths(profile: Optional[str] = None) -> Dict[str, Path]:
+    """Returns isolated session, cache, and saved_data file paths for a profile."""
+    pdir = get_profile_dir(profile)
+    return {
+        "profile_dir": pdir,
+        "session_file": pdir / "session.json",
+        "cache_file": pdir / "cache.json",
+        "saved_data_file": pdir / "saved_data.json",
+    }
+
+
+_default_paths = get_profile_paths(MOODLE_PROFILE)
+SESSION_FILE = Path(os.getenv("MOODLE_SESSION_FILE", str(_default_paths["session_file"])))
+CACHE_FILE = Path(os.getenv("MOODLE_CACHE_FILE", str(_default_paths["cache_file"])))
+SAVED_DATA_FILE = Path(os.getenv("MOODLE_SAVED_DATA_FILE", str(_default_paths["saved_data_file"])))
 
 # Default Cache Time-To-Live (in seconds)
 CACHE_TTL_COURSES = int(os.getenv("MOODLE_CACHE_TTL_COURSES", str(24 * 3600)))      # 24 hours
@@ -78,6 +110,8 @@ class Config:
     PANOPTO_URL = PANOPTO_URL
     SCRAPE_PANOPTO = SCRAPE_PANOPTO
     SESSION_DIR = SESSION_DIR
+    PROFILES_DIR = PROFILES_DIR
+    PROFILE = MOODLE_PROFILE
     SESSION_FILE = SESSION_FILE
     CACHE_FILE = CACHE_FILE
     SAVED_DATA_FILE = SAVED_DATA_FILE
@@ -88,5 +122,6 @@ class Config:
     CACHE_TTL_GRADES = CACHE_TTL_GRADES
     CACHE_TTL_MEETINGS = CACHE_TTL_MEETINGS
     USER_AGENT = USER_AGENT
+
 
 

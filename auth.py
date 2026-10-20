@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import html
+from pathlib import Path
 from typing import Any, Dict, Optional
 import requests
 
@@ -25,7 +26,9 @@ from moodle_mcp.config import (
     MOODLE_SESSION_COOKIE,
     SESSION_FILE,
     SESSION_DIR,
-    USER_AGENT
+    USER_AGENT,
+    sanitize_profile_name,
+    get_profile_paths,
 )
 
 logger = logging.getLogger("moodle_mcp.auth")
@@ -37,8 +40,21 @@ class MoodleAuthError(Exception):
 
 
 class MoodleAuth:
-    def __init__(self, moodle_url: Optional[str] = None, base_url: Optional[str] = None):
+    def __init__(
+        self,
+        moodle_url: Optional[str] = None,
+        base_url: Optional[str] = None,
+        profile: Optional[str] = None,
+        session_file: Optional[Path] = None,
+    ):
         self.moodle_url = (base_url or moodle_url or MOODLE_URL).rstrip("/")
+        self.profile = sanitize_profile_name(profile)
+        if session_file:
+            self.session_file = Path(session_file)
+        elif profile:
+            self.session_file = get_profile_paths(self.profile)["session_file"]
+        else:
+            self.session_file = Path(os.getenv("MOODLE_SESSION_FILE", str(get_profile_paths(self.profile)["session_file"])))
         self.token: Optional[str] = None
         self.session: requests.Session = requests.Session()
         self.session.headers.update({"User-Agent": USER_AGENT})
@@ -51,11 +67,12 @@ class MoodleAuth:
         self.load_cached_session()
 
     def _save_session(self) -> None:
-        """Saves current authentication session to local cache."""
+        """Saves current authentication session to the profile's local cache."""
         try:
-            SESSION_DIR.mkdir(parents=True, exist_ok=True)
+            self.session_file.parent.mkdir(parents=True, exist_ok=True)
             cookies_dict = self.session.cookies.get_dict()
             payload = {
+                "profile": self.profile,
                 "moodle_url": self.moodle_url,
                 "token": self.token,
                 "sesskey": self.sesskey,
@@ -64,18 +81,33 @@ class MoodleAuth:
                 "auth_type": self.auth_type,
                 "cookies": cookies_dict
             }
-            with open(SESSION_FILE, "w", encoding="utf-8") as f:
+            with open(self.session_file, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
-            logger.info(f"Saved Moodle session cache to {SESSION_FILE}")
+            logger.info(f"Saved Moodle session cache for profile '{self.profile}' to {self.session_file}")
         except Exception as e:
             logger.warning(f"Could not save session cache: {e}")
 
     def load_cached_session(self) -> bool:
         """Loads and validates a cached session from disk if available."""
-        if not SESSION_FILE.exists():
-            return False
+        target_file = self.session_file
+        if not target_file.exists():
+            # Fallback to legacy root session.json if migrating a single-user setup
+            legacy_file = SESSION_DIR / "session.json"
+            if legacy_file.exists():
+                try:
+                    with open(legacy_file, "r", encoding="utf-8") as lf:
+                        legacy_data = json.load(lf)
+                    legacy_user = (legacy_data.get("user_profile") or {}).get("username", "")
+                    if self.profile == "default" or (legacy_user and sanitize_profile_name(legacy_user) == self.profile):
+                        target_file = legacy_file
+                    else:
+                        return False
+                except Exception:
+                    return False
+            else:
+                return False
         try:
-            with open(SESSION_FILE, "r", encoding="utf-8") as f:
+            with open(target_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             cached_url = data.get("moodle_url", "").rstrip("/")
@@ -141,13 +173,13 @@ class MoodleAuth:
         self.auth_type = None
         self.session.cookies.clear()
         
-        if SESSION_FILE.exists():
+        if self.session_file.exists():
             try:
-                SESSION_FILE.unlink()
+                self.session_file.unlink()
             except Exception as e:
                 logger.warning(f"Could not remove session file: {e}")
                 
-        return {"success": True, "message": "Successfully logged out and cleared session cache."}
+        return {"success": True, "profile": self.profile, "message": "Successfully logged out and cleared session cache."}
 
     def _fetch_site_info(self, token: str) -> Dict[str, Any]:
         """Calls core_webservice_get_site_info using wstoken."""
@@ -537,6 +569,8 @@ class MoodleAuth:
         is_auth = self.ensure_authenticated()
         return {
             "authenticated": is_auth,
+            "profile": self.profile,
+            "session_file": str(self.session_file),
             "moodle_url": self.moodle_url,
             "auth_type": self.auth_type,
             "has_token": bool(self.token),

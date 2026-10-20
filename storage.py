@@ -19,6 +19,8 @@ from moodle_mcp.config import (
     CACHE_FILE,
     SAVED_DATA_FILE,
     TIMEZONE,
+    sanitize_profile_name,
+    get_profile_paths,
 )
 
 logger = logging.getLogger("moodle_mcp.storage")
@@ -44,11 +46,17 @@ def _atomic_json_write(file_path: Path, data: Any) -> None:
 class CacheManager:
     """
     Manages automatic disk caching of Moodle API responses.
-    Each entry is stored with a UNIX timestamp and payload.
+    Each entry is stored with a UNIX timestamp and payload in the profile's cache directory.
     """
 
-    def __init__(self, cache_file: Optional[Path] = None):
-        self.cache_file = cache_file or CACHE_FILE
+    def __init__(self, cache_file: Optional[Path] = None, profile: Optional[str] = None):
+        self.profile = sanitize_profile_name(profile)
+        if cache_file:
+            self.cache_file = Path(cache_file)
+        elif profile:
+            self.cache_file = get_profile_paths(self.profile)["cache_file"]
+        else:
+            self.cache_file = Path(os.getenv("MOODLE_CACHE_FILE", str(get_profile_paths(self.profile)["cache_file"])))
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._load()
 
@@ -138,6 +146,7 @@ class CacheManager:
             }
 
         return {
+            "profile": self.profile,
             "cache_file": str(self.cache_file),
             "total_entries": len(self._cache),
             "entries": entries_info
@@ -147,11 +156,17 @@ class CacheManager:
 class DataStore:
     """
     Key-value store for named items saved by AI assistants (Gemini) across sessions.
-    Stores curated data, notes, filtered courses, study plans, etc.
+    Stores curated data, notes, filtered courses, study plans, etc. in the profile's storage directory.
     """
 
-    def __init__(self, store_file: Optional[Path] = None):
-        self.store_file = store_file or SAVED_DATA_FILE
+    def __init__(self, store_file: Optional[Path] = None, profile: Optional[str] = None):
+        self.profile = sanitize_profile_name(profile)
+        if store_file:
+            self.store_file = Path(store_file)
+        elif profile:
+            self.store_file = get_profile_paths(self.profile)["saved_data_file"]
+        else:
+            self.store_file = Path(os.getenv("MOODLE_SAVED_DATA_FILE", str(get_profile_paths(self.profile)["saved_data_file"])))
         self.tz = pytz.timezone(TIMEZONE)
         self._data: Dict[str, Dict[str, Any]] = {}
         self._load()
@@ -183,6 +198,7 @@ class DataStore:
         now_dt = datetime.now(self.tz)
         saved_entry = {
             "key": clean_key,
+            "profile": self.profile,
             "saved_at": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "timestamp": time.time(),
             "description": (description or "").strip(),
@@ -191,15 +207,16 @@ class DataStore:
         }
         self._data[clean_key] = saved_entry
         self._save()
-        logger.info(f"Saved custom data under key '{clean_key}'")
+        logger.info(f"Saved custom data under key '{clean_key}' for profile '{self.profile}'")
 
         return {
             "success": True,
+            "profile": self.profile,
             "key": clean_key,
             "saved_at": saved_entry["saved_at"],
             "description": saved_entry["description"],
             "data_type": saved_entry["data_type"],
-            "message": f"Successfully saved '{clean_key}' to persistent storage."
+            "message": f"Successfully saved '{clean_key}' to persistent storage (profile: {self.profile})."
         }
 
     def load(self, key: str) -> Optional[Dict[str, Any]]:
