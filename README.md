@@ -262,13 +262,32 @@ Add to your Gemini configuration file (`~/.gemini/config/mcp_config.json`):
 }
 ```
 
-#### Protocol B: Streamable HTTP Transport (Network / Remote / Gemini Enterprise)
+#### Protocol B: Streamable HTTP Transport & OAuth 2.1 (Gemini Web, Cloudflare Tunnel, Remote)
+
 Start the Moodle MCP server in `streamable-http` mode:
 ```bash
 python -m moodle_mcp --transport streamable-http --host 0.0.0.0 --port 8000
 ```
 
-Configure Gemini's `mcp_config.json`:
+##### 🌟 Multi-User Zero-Configuration with Gemini Web
+`moodle_mcp` supports **OAuth 2.1 with PKCE, Dynamic Client Registration (RFC 7591), and Protected Resource Discovery (RFC 9470 / RFC 8414)**. This allows **any number of different users** to connect to the exact same MCP server URL (e.g., `https://moodle-mcp.mantin.dev/mcp` or `http://localhost:8000/mcp`) with **zero server-side pre-configuration**:
+
+1. **Add MCP Server in Gemini Web**:
+   - Open Gemini -> Settings -> Connected Tools -> **Add MCP Server**.
+   - **Server URL**: `https://moodle-mcp.mantin.dev/mcp` (or `http://localhost:8000/mcp`)
+   - **Authentication Type**: `OAuth 2.0`
+
+2. **Authenticate Once**:
+   - **Option 1: Browser SSO Login (Recommended)**: Leave *Client ID* and *Client Secret* empty and click **Next**. A secure popup will open with the TAU SSO login screen. Sign in once with your university username, student ID, and password.
+   - **Option 2: Direct Credentials**: In Gemini's modal, enter your TAU SSO username (or `username:student_id`) in *Client ID* and your password in *Client Secret* for instant zero-popup setup.
+
+3. **Enjoy Transparent, Zero-Prompt Academic AI**:
+   - Gemini stores the encrypted OAuth token.
+   - You **never** need to log in again during future conversations or tool calls.
+   - **Self-Healing Session Recovery**: If TAU Moodle's session expires after a few hours, the server transparently and silently re-authenticates in the background without interrupting your chat.
+   - **Stateless Multi-User Isolation**: Different users connecting to the exact same URL are completely isolated into their own in-memory sessions with their own courses, assignments, and grades.
+
+##### Gemini CLI (`mcp_config.json`) Configuration:
 ```json
 {
   "mcpServers": {
@@ -283,7 +302,7 @@ Or when exposed via Cloudflare Tunnel:
 {
   "mcpServers": {
     "moodle": {
-      "url": "https://moodle.mantin.dev/mcp"
+      "url": "https://moodle-mcp.mantin.dev/mcp"
     }
   }
 }

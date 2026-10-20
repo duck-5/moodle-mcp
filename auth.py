@@ -68,6 +68,8 @@ class MoodleAuth:
 
     def _save_session(self) -> None:
         """Saves current authentication session to the profile's local cache."""
+        if self.profile.startswith("oauth_") or self.profile == "stateless":
+            return
         try:
             self.session_file.parent.mkdir(parents=True, exist_ok=True)
             cookies_dict = self.session.cookies.get_dict()
@@ -520,6 +522,18 @@ class MoodleAuth:
 
         if not force_refresh and self.load_cached_session():
             return True
+
+        # Check instance-stored SSO credentials (e.g. from decrypted OAuth session)
+        if getattr(self, "_sso_username", None) and getattr(self, "_sso_password", None):
+            try:
+                self.login_with_sso(
+                    self._sso_username,
+                    self._sso_password,
+                    getattr(self, "_sso_student_id", None)
+                )
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to auto-relogin with instance SSO credentials: {e}")
 
         prof_prefix = f"{self.profile.upper()}_MOODLE" if self.profile != "default" else ""
         prof_suffix = f"MOODLE_{self.profile.upper()}" if self.profile != "default" else ""

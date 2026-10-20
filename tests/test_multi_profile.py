@@ -33,16 +33,16 @@ class TestMultiProfile(unittest.TestCase):
         paths_yuval = get_profile_paths("yuval")
         paths_yaeli = get_profile_paths("yaeli")
         self.assertNotEqual(paths_yuval["session_file"], paths_yaeli["session_file"])
-        self.assertTrue(str(paths_yuval["session_file"]).endswith("profiles/yuval/session.json"))
-        self.assertTrue(str(paths_yaeli["session_file"]).endswith("profiles/yaeli/session.json"))
+        self.assertTrue(str(paths_yuval["session_file"]).replace("\\", "/").endswith("profiles/yuval/session.json"))
+        self.assertTrue(str(paths_yaeli["session_file"]).replace("\\", "/").endswith("profiles/yaeli/session.json"))
 
     def test_profile_auth_initialization(self):
         auth_yuval = MoodleAuth(profile="yuval")
         auth_yaeli = MoodleAuth(profile="yaeli")
         self.assertEqual(auth_yuval.profile, "yuval")
         self.assertEqual(auth_yaeli.profile, "yaeli")
-        self.assertIn("profiles/yuval", str(auth_yuval.session_file))
-        self.assertIn("profiles/yaeli", str(auth_yaeli.session_file))
+        self.assertIn("profiles/yuval", str(auth_yuval.session_file).replace("\\", "/"))
+        self.assertIn("profiles/yaeli", str(auth_yaeli.session_file).replace("\\", "/"))
 
 
 if __name__ == "__main__":

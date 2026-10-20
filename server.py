@@ -136,8 +136,10 @@ def create_server(profile: Optional[str] = None) -> Tuple[Any, Any, Any]:
 
         server.add_tool = add_tool_with_annotations
 
+    from moodle_mcp.oauth import ClientProxy
     auth = MoodleAuth(profile=profile)
-    client = MoodleClient(auth=auth, profile=profile)
+    base_client = MoodleClient(auth=auth, profile=profile)
+    client = ClientProxy(base_client)
     panopto = PanoptoManager(moodle_client=client)
 
     # Register all tools (courses, assignments, grades, files, meetings, recordings, quizzes, calendar, forums, participants, search)
@@ -317,6 +319,12 @@ def run_streamable_http_server(server: Any, host: str = "0.0.0.0", port: int = 8
 
     routes.append(Route("/health", health, methods=["GET"]))
 
+    # Mount OAuth 2.1 metadata, login, and token endpoints
+    from moodle_mcp.oauth import TokenManager, create_oauth_routes, BearerAuthMiddleware
+    token_manager = TokenManager()
+    for r in create_oauth_routes(token_manager):
+        routes.append(r)
+
     # Build and mount all other discovered profiles
     for prof in profiles:
         if prof == "default":
@@ -339,17 +347,26 @@ def run_streamable_http_server(server: Any, host: str = "0.0.0.0", port: int = 8
             yield
 
     master_app = Starlette(routes=routes, lifespan=lifespan)
+    require_auth = os.getenv("MOODLE_REQUIRE_AUTH", "1") in ("1", "true", "True")
+    master_app.add_middleware(
+        BearerAuthMiddleware,
+        token_manager=token_manager,
+        require_auth=require_auth
+    )
     master_app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["mcp-session-id"],
+        expose_headers=["mcp-session-id", "www-authenticate", "authorization"],
     )
 
-    print(f"🚀 Starting Moodle MCP Multi-Profile Server on http://{host}:{port}")
+    print(f"🚀 Starting Moodle MCP Multi-Profile & OAuth Server on http://{host}:{port}")
     print(f"   Default Endpoint: http://{host}:{port}/mcp (or root /)")
+    print(f"   OAuth 2.1 Authorize: http://{host}:{port}/authorize")
+    print(f"   OAuth 2.1 Token: http://{host}:{port}/token")
+    print(f"   Protected Resource Metadata: http://{host}:{port}/.well-known/oauth-protected-resource")
     for prof in profiles:
         if prof != "default":
             print(f"   Profile '{prof}': http://{host}:{port}/{prof}/mcp (or /{prof})")

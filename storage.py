@@ -1,83 +1,28 @@
 """
-Persistent storage and automatic caching for moodle_mcp.
-Provides:
-1. CacheManager: Transparent disk-based caching for API responses with configurable TTLs.
-2. DataStore: Named key-value store for AI assistants (e.g., Gemini) to save and load curated data across sessions.
+In-memory caching and session state management for moodle_mcp.
+Provides an in-memory TTL CacheManager to eliminate duplicate API calls
+during LLM reasoning turns without polluting the local filesystem.
 """
 
-import json
 import logging
-import os
 import time
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
-import pytz
-
-from moodle_mcp.config import (
-    SESSION_DIR,
-    CACHE_FILE,
-    SAVED_DATA_FILE,
-    TIMEZONE,
-    sanitize_profile_name,
-    get_profile_paths,
-)
 
 logger = logging.getLogger("moodle_mcp.storage")
 
 
-def _atomic_json_write(file_path: Path, data: Any) -> None:
-    """Atomically writes data as JSON to file_path to prevent file corruption."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = file_path.with_suffix(f".tmp_{os.getpid()}_{int(time.time() * 1000)}")
-    try:
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(temp_path, file_path)
-    except Exception as e:
-        if temp_path.exists():
-            try:
-                temp_path.unlink()
-            except Exception:
-                pass
-        raise e
-
-
 class CacheManager:
     """
-    Manages automatic disk caching of Moodle API responses.
-    Each entry is stored with a UNIX timestamp and payload in the profile's cache directory.
+    In-memory TTL cache for Moodle API responses.
+    Keeps API responses cached in RAM during conversations without writing files to disk.
     """
+    _storage: Dict[str, Dict[str, Any]] = {}
 
-    def __init__(self, cache_file: Optional[Path] = None, profile: Optional[str] = None):
-        self.profile = sanitize_profile_name(profile)
-        if cache_file:
-            self.cache_file = Path(cache_file)
-        elif profile:
-            self.cache_file = get_profile_paths(self.profile)["cache_file"]
-        else:
-            self.cache_file = Path(os.getenv("MOODLE_CACHE_FILE", str(get_profile_paths(self.profile)["cache_file"])))
-        self._cache: Dict[str, Dict[str, Any]] = {}
-        self._load()
-
-    def _load(self) -> None:
-        """Loads cache from disk if available."""
-        if not self.cache_file.exists():
-            self._cache = {}
-            return
-        try:
-            with open(self.cache_file, "r", encoding="utf-8") as f:
-                self._cache = json.load(f)
-        except Exception as e:
-            logger.warning(f"Could not load cache from {self.cache_file}: {e}")
-            self._cache = {}
-
-    def _save(self) -> None:
-        """Saves cache to disk."""
-        try:
-            _atomic_json_write(self.cache_file, self._cache)
-        except Exception as e:
-            logger.warning(f"Failed to save cache to {self.cache_file}: {e}")
+    def __init__(self, profile: Optional[str] = None, cache_file: Any = None, *args: Any, **kwargs: Any):
+        self.profile = profile or (str(cache_file) if cache_file else "default")
+        if self.profile not in CacheManager._storage:
+            CacheManager._storage[self.profile] = {}
+        self._cache = CacheManager._storage[self.profile]
 
     def get(self, key: str, max_age: Optional[int] = None) -> Optional[Any]:
         """
@@ -91,7 +36,7 @@ class CacheManager:
         entry_time = entry.get("timestamp", 0)
         age = time.time() - entry_time
 
-        if max_age is not None and age > max_age:
+        if max_age is not None and age >= max_age:
             logger.debug(f"Cache expired for '{key}' (age: {age:.0f}s, max: {max_age}s)")
             return None
 
@@ -99,18 +44,16 @@ class CacheManager:
         return entry.get("data")
 
     def set(self, key: str, data: Any) -> None:
-        """Stores data in the cache with the current timestamp."""
+        """Stores data in the in-memory cache with the current timestamp."""
         self._cache[key] = {
             "timestamp": time.time(),
             "data": data
         }
-        self._save()
 
     def delete(self, key: str) -> bool:
         """Deletes a specific key from the cache."""
         if key in self._cache:
             del self._cache[key]
-            self._save()
             return True
         return False
 
@@ -121,15 +64,12 @@ class CacheManager:
         """
         if not prefix:
             count = len(self._cache)
-            self._cache = {}
-            self._save()
+            self._cache.clear()
             return count
 
         keys_to_remove = [k for k in self._cache if k.startswith(prefix)]
         for k in keys_to_remove:
             del self._cache[k]
-        if keys_to_remove:
-            self._save()
         return len(keys_to_remove)
 
     def get_stats(self) -> Dict[str, Any]:
@@ -147,7 +87,7 @@ class CacheManager:
 
         return {
             "profile": self.profile,
-            "cache_file": str(self.cache_file),
+            "storage_type": "in-memory",
             "total_entries": len(self._cache),
             "entries": entries_info
         }
@@ -155,113 +95,50 @@ class CacheManager:
 
 class DataStore:
     """
-    Key-value store for named items saved by AI assistants (Gemini) across sessions.
-    Stores curated data, notes, filtered courses, study plans, etc. in the profile's storage directory.
+    Lightweight in-memory compatibility store.
+    User note persistence is delegated to Google Docs / Gemini Workspace integrations.
     """
+    _storage: Dict[str, Dict[str, Any]] = {}
 
-    def __init__(self, store_file: Optional[Path] = None, profile: Optional[str] = None):
-        self.profile = sanitize_profile_name(profile)
-        if store_file:
-            self.store_file = Path(store_file)
-        elif profile:
-            self.store_file = get_profile_paths(self.profile)["saved_data_file"]
-        else:
-            self.store_file = Path(os.getenv("MOODLE_SAVED_DATA_FILE", str(get_profile_paths(self.profile)["saved_data_file"])))
-        self.tz = pytz.timezone(TIMEZONE)
-        self._data: Dict[str, Dict[str, Any]] = {}
-        self._load()
-
-    def _load(self) -> None:
-        """Loads saved data from disk."""
-        if not self.store_file.exists():
-            self._data = {}
-            return
-        try:
-            with open(self.store_file, "r", encoding="utf-8") as f:
-                self._data = json.load(f)
-        except Exception as e:
-            logger.warning(f"Could not load saved data from {self.store_file}: {e}")
-            self._data = {}
-
-    def _save(self) -> None:
-        """Saves data store to disk."""
-        try:
-            _atomic_json_write(self.store_file, self._data)
-        except Exception as e:
-            logger.warning(f"Failed to save data store to {self.store_file}: {e}")
+    def __init__(self, profile: Optional[str] = None, store_file: Any = None, *args: Any, **kwargs: Any):
+        self.profile = profile or (str(store_file) if store_file else "default")
+        if self.profile not in DataStore._storage:
+            DataStore._storage[self.profile] = {}
+        self._data = DataStore._storage[self.profile]
 
     def save(self, key: str, data: Any, description: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Saves data under key with metadata (timestamp, description, data type).
-        """
         clean_key = key.strip()
-        now_dt = datetime.now(self.tz)
-        saved_entry = {
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        self._data[clean_key] = {
             "key": clean_key,
-            "profile": self.profile,
-            "saved_at": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "description": description or "",
+            "data": data,
+            "saved_at": now_str,
             "timestamp": time.time(),
-            "description": (description or "").strip(),
             "data_type": type(data).__name__,
-            "data": data
+            "items_count": len(data) if isinstance(data, (list, dict)) else 1
         }
-        self._data[clean_key] = saved_entry
-        self._save()
-        logger.info(f"Saved custom data under key '{clean_key}' for profile '{self.profile}'")
-
-        return {
-            "success": True,
-            "profile": self.profile,
-            "key": clean_key,
-            "saved_at": saved_entry["saved_at"],
-            "description": saved_entry["description"],
-            "data_type": saved_entry["data_type"],
-            "message": f"Successfully saved '{clean_key}' to persistent storage (profile: {self.profile})."
-        }
+        return {"success": True, "key": clean_key, "message": f"Saved '{clean_key}' in memory."}
 
     def load(self, key: str) -> Optional[Dict[str, Any]]:
-        """
-        Loads an item by its key.
-        Returns the full stored record including metadata and payload, or None if not found.
-        """
-        clean_key = key.strip()
-        # Always reload from disk to ensure latest data across independent processes
-        self._load()
-        return self._data.get(clean_key)
+        return self._data.get(key.strip())
 
     def list_keys(self) -> List[Dict[str, Any]]:
-        """
-        Lists metadata for all saved items without including the full data payloads.
-        """
-        self._load()
-        summaries = []
-        for key, entry in self._data.items():
-            payload = entry.get("data")
-            count = len(payload) if isinstance(payload, (list, dict)) else None
-            summaries.append({
-                "key": key,
-                "saved_at": entry.get("saved_at"),
-                "description": entry.get("description", ""),
-                "data_type": entry.get("data_type", "unknown"),
-                "items_count": count
-            })
-        return summaries
+        return [
+            {
+                "key": k,
+                "description": v.get("description", ""),
+                "saved_at": v.get("saved_at", ""),
+                "items_count": v.get("items_count", 1),
+                "data_type": v.get("data_type", "")
+            }
+            for k, v in self._data.items()
+        ]
 
     def delete(self, key: str) -> bool:
-        """Deletes a saved item by key."""
-        clean_key = key.strip()
-        self._load()
-        if clean_key in self._data:
-            del self._data[clean_key]
-            self._save()
-            logger.info(f"Deleted saved key '{clean_key}'")
-            return True
-        return False
+        return bool(self._data.pop(key.strip(), None))
 
     def clear(self) -> int:
-        """Clears all saved items."""
-        self._load()
         count = len(self._data)
-        self._data = {}
-        self._save()
+        self._data.clear()
         return count
