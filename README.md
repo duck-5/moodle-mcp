@@ -209,62 +209,100 @@ TIMEZONE=Asia/Jerusalem
 
 ## 🤖 Connecting AI Providers
 
-### 1. Google Gemini (Native Agent & Function Calling)
+### 1. Google Gemini & Antigravity (MCP Server Integration)
 
-`moodle_mcp` includes native support for Google Gemini via the official `google-genai` SDK and dynamic function calling. Gemini connects to your Moodle session, inspects course contents, evaluates assignment deadlines, and queries your grades.
+Google Gemini (via Gemini CLI, Antigravity, and Gemini Enterprise) supports connecting to MCP servers using two official transport protocols:
+1. **`stdio` (Local Subprocess)**: Gemini launches the Python process and communicates over stdin/stdout via JSON-RPC.
+2. **`streamable-http` (Remote HTTP/HTTPS)**: Gemini connects over modern Streamable HTTP to `/mcp`. *(Note: Google Gemini explicitly does not support legacy HTTP+SSE; it requires Streamable HTTP).*
 
-#### Setup:
-1. Obtain an API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
-2. Add your key to `.env`:
-   ```bash
-   GEMINI_API_KEY=AIzaSy...
-   GEMINI_MODEL=gemini-2.5-flash
-   ```
+#### Protocol A: Stdio Transport (Local / Docker)
+Add to your Gemini configuration file (`~/.gemini/config/mcp_config.json`):
 
-#### Interactive Chat Mode:
-Start an interactive terminal conversation where Gemini automatically invokes Moodle tools:
+**Direct Python:**
+```json
+{
+  "mcpServers": {
+    "moodle": {
+      "command": "/path/to/moodle-mcp/.venv/bin/python",
+      "args": [
+        "-m",
+        "moodle_mcp",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "MOODLE_URL": "https://moodle.tau.ac.il",
+        "MOODLE_USERNAME": "your_username",
+        "MOODLE_PASSWORD": "your_password",
+        "MOODLE_STUDENT_ID": "123456789"
+      }
+    }
+  }
+}
+```
+
+**Via Docker:**
+```json
+{
+  "mcpServers": {
+    "moodle": {
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "moodle-mcp",
+        "python",
+        "-m",
+        "moodle_mcp",
+        "--transport",
+        "stdio"
+      ]
+    }
+  }
+}
+```
+
+#### Protocol B: Streamable HTTP Transport (Network / Remote / Gemini Enterprise)
+Start the Moodle MCP server in `streamable-http` mode:
 ```bash
-# Using CLI entrypoint
-python -m moodle_mcp --mode gemini
-
-# Or using console script
-moodle-mcp-gemini
+python -m moodle_mcp --transport streamable-http --host 0.0.0.0 --port 8000
 ```
 
-Example interaction:
+Configure Gemini's `mcp_config.json`:
+```json
+{
+  "mcpServers": {
+    "moodle": {
+      "url": "http://127.0.0.1:8000/mcp"
+    }
+  }
+}
 ```
-🎓 Moodle Gemini Assistant — Active (Model: gemini-2.5-flash)
-Connected to Moodle instance: https://moodle.tau.ac.il
-
-👤 You: What assignments are due in the next 10 days?
-🤖 Gemini is thinking...
-You have 2 pending assignments due within the next 10 days:
-1. Introduction to Quantum Mechanics — Problem Set 3
-   • Due: Sunday, Nov 2, 23:59 (4 days remaining)
-   • Status: Not submitted
-2. Operating Systems — Assignment 2 (Thread Pools)
-   • Due: Thursday, Nov 6, 23:59 (8 days remaining)
-   • Status: Draft saved
-```
-
-#### Single Query CLI Mode:
-Ask a single question and receive an immediate answer:
-```bash
-python -m moodle_mcp --mode gemini --prompt "Summarize my grades across all courses"
-```
-
-#### Programmatic Python Usage:
-```python
-from moodle_mcp.gemini_client import MoodleGeminiAgent
-
-agent = MoodleGeminiAgent()
-response = agent.query_once("What are my deadlines this week?")
-print(response)
+Or when exposed via Cloudflare Tunnel:
+```json
+{
+  "mcpServers": {
+    "moodle": {
+      "url": "https://moodle.mantin.dev/mcp"
+    }
+  }
+}
 ```
 
 ---
 
-### 2. Claude Desktop (Native MCP)
+### 2. Standalone Gemini Agent (Direct Script & CLI)
+
+If you also wish to chat directly with Gemini from the terminal using function calling without an external MCP host:
+
+```bash
+# Add GEMINI_API_KEY to your .env
+python -m moodle_mcp --mode gemini
+```
+
+---
+
+### 3. Claude Desktop (Native MCP)
 
 Add `moodle` to your `claude_desktop_config.json`:
 
