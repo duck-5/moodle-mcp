@@ -25,6 +25,79 @@ except ImportError:
     except ImportError:
         raise ImportError("The 'mcp' package is required. Install it with: pip install mcp")
 
+
+def patch_mcp_list_serialization() -> None:
+    """
+    Ensures that MCPServer / FastMCP serializes list tool outputs into a single TextContent block.
+    By default, FastMCP decomposes a Python list into individual TextContent blocks (one per item).
+    Many MCP clients (notably Google Gemini Web) only read content[0], causing tools returning lists
+    (e.g., enrolled courses, assignments, grades summary, calendar events) to display only the first item.
+    """
+    import pydantic_core
+    from mcp.types import ContentBlock, TextContent
+
+    modules = []
+    try:
+        import mcp.server.mcpserver.utilities.func_metadata as fm2
+        modules.append(fm2)
+    except ImportError:
+        pass
+
+    try:
+        import mcp.server.fastmcp.utilities.func_metadata as fm1
+        modules.append(fm1)
+    except ImportError:
+        pass
+
+    try:
+        import mcp.server.fastmcp.tools.base as tb1
+        modules.append(tb1)
+    except ImportError:
+        pass
+
+    for mod in modules:
+        if hasattr(mod, "_convert_to_content"):
+            orig = getattr(mod, "_convert_to_content")
+            if getattr(orig, "_is_single_block_patched", False):
+                continue
+
+            img_cls = getattr(mod, "Image", None)
+            aud_cls = getattr(mod, "Audio", None)
+
+            def make_patched(original_func, img_t, aud_t):
+                def patched(result):
+                    if result is None:
+                        return []
+                    if isinstance(result, ContentBlock):
+                        return [result]
+                    if img_t and isinstance(result, img_t):
+                        return [result.to_image_content()]
+                    if aud_t and isinstance(result, aud_t):
+                        return [result.to_audio_content()]
+                    if isinstance(result, (list, tuple)):
+                        if len(result) == 0:
+                            return [TextContent(type="text", text="[]")]
+                        special_types = [ContentBlock]
+                        if img_t:
+                            special_types.append(img_t)
+                        if aud_t:
+                            special_types.append(aud_t)
+                        special_tuple = tuple(special_types)
+                        if all(isinstance(x, special_tuple) for x in result):
+                            return original_func(result)
+                        text = pydantic_core.to_json(result, fallback=str, indent=2).decode("utf-8")
+                        return [TextContent(type="text", text=text)]
+                    return original_func(result)
+
+                patched._is_single_block_patched = True
+                return patched
+
+            setattr(mod, "_convert_to_content", make_patched(orig, img_cls, aud_cls))
+
+
+# Apply list serialization patch immediately on import
+patch_mcp_list_serialization()
+
 from moodle_mcp.auth import MoodleAuth
 from moodle_mcp.client import MoodleClient
 from moodle_mcp.panopto import PanoptoManager
