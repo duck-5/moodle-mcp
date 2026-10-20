@@ -113,6 +113,29 @@ def create_server(profile: Optional[str] = None) -> Tuple[Any, Any, Any]:
         name=f"moodle_mcp_{prof_name}" if prof_name != "default" else "moodle_mcp"
     )
 
+    # Automatically annotate tools with MCP read_only_hint / destructive_hint
+    # so clients (Gemini, Claude, Cursor) know which tools can be safely auto-approved.
+    orig_add_tool = getattr(server, "add_tool", None)
+    if callable(orig_add_tool):
+        def add_tool_with_annotations(fn: Any, *args: Any, **kwargs: Any) -> Any:
+            if kwargs.get("annotations") is None:
+                fn_name = kwargs.get("name") or getattr(fn, "__name__", "")
+                read_only_prefixes = ("moodle_get_", "moodle_search", "moodle_read_", "moodle_list_", "moodle_load_")
+                destructive_prefixes = ("moodle_delete_", "moodle_clear_")
+                try:
+                    from mcp.types import ToolAnnotations
+                    if fn_name.startswith(destructive_prefixes):
+                        kwargs["annotations"] = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False)
+                    elif fn_name.startswith(read_only_prefixes):
+                        kwargs["annotations"] = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
+                    else:
+                        kwargs["annotations"] = ToolAnnotations(read_only_hint=False, destructive_hint=False)
+                except Exception:
+                    pass
+            return orig_add_tool(fn, *args, **kwargs)
+
+        server.add_tool = add_tool_with_annotations
+
     auth = MoodleAuth(profile=profile)
     client = MoodleClient(auth=auth, profile=profile)
     panopto = PanoptoManager(moodle_client=client)
