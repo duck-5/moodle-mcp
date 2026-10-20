@@ -7,6 +7,7 @@ Supports stdio, SSE, streamable-http transports, as well as OpenAPI REST gateway
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any, Optional, Tuple
