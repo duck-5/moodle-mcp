@@ -79,12 +79,14 @@ class MoodleClient:
         self,
         auth: Optional[MoodleAuth] = None,
         cache: Optional[CacheManager] = None,
-        data_store: Optional[DataStore] = None
+        data_store: Optional[DataStore] = None,
+        profile: Optional[str] = None,
     ):
-        self.auth = auth or MoodleAuth()
+        self.auth = auth or MoodleAuth(profile=profile)
+        self.profile = self.auth.profile
         self.tz = pytz.timezone(TIMEZONE)
-        self.cache = cache or CacheManager()
-        self.data_store = data_store or DataStore()
+        self.cache = cache or CacheManager(profile=self.profile)
+        self.data_store = data_store or DataStore(profile=self.profile)
 
     def _call_ws(
         self,
