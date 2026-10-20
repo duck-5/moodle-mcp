@@ -238,7 +238,8 @@ class TestOAuthHTTPFlow(unittest.TestCase):
             "username": "noa",
             "student_id": "333222111",
             "password": "noa_pass",
-            "user_id": 7777
+            "user_id": 7777,
+            "user_profile": {"huge_profile": "x" * 50000}
         }
         code = self.tm.create_auth_code(
             session_data=session_data,
@@ -253,10 +254,27 @@ class TestOAuthHTTPFlow(unittest.TestCase):
             "redirect_uri": "https://gemini.google.com/callback"
         })
         self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.headers.get("cache-control"), "no-store")
         token_data = res.json()
         self.assertIn("access_token", token_data)
         self.assertIn("refresh_token", token_data)
         self.assertEqual(token_data["token_type"], "Bearer")
+
+        # Crucial check: verify that the token is strictly compact (< 3000 bytes)
+        # despite 50KB user_profile in session_data
+        self.assertLess(len(token_data["access_token"]), 3000)
+
+        # Verify decryption restores session and strips user_profile
+        decrypted = self.tm.decrypt_payload(token_data["access_token"])
+        self.assertEqual(decrypted["username"], "noa")
+        self.assertNotIn("user_profile", decrypted)
+
+    def test_protected_resource_subpath_route(self):
+        # RFC 9470 subpath query as used by Gemini Web
+        res = self.client.get("/.well-known/oauth-protected-resource/mcp")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("authorization_servers", data)
 
 
 if __name__ == "__main__":

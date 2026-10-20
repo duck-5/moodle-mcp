@@ -21,6 +21,7 @@ import logging
 import os
 import secrets
 import time
+import zlib
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse, parse_qs
@@ -101,13 +102,21 @@ class TokenManager:
         self._active_clients: Dict[str, Tuple[float, MoodleClient]] = {}
 
     def encrypt_payload(self, data: Dict[str, Any]) -> str:
-        raw_json = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        return self._fernet.encrypt(raw_json).decode("utf-8")
+        # Strip user_profile if present to keep Bearer tokens compact and avoid HTTP header limits
+        clean_data = {k: v for k, v in data.items() if k != "user_profile"}
+        raw_json = json.dumps(clean_data, ensure_ascii=False).encode("utf-8")
+        compressed = zlib.compress(raw_json, level=9)
+        return self._fernet.encrypt(compressed).decode("utf-8")
 
     def decrypt_payload(self, token_str: str) -> Optional[Dict[str, Any]]:
         try:
             raw_bytes = self._fernet.decrypt(token_str.encode("utf-8"), ttl=None)
-            return json.loads(raw_bytes.decode("utf-8"))
+            try:
+                decompressed = zlib.decompress(raw_bytes)
+                return json.loads(decompressed.decode("utf-8"))
+            except Exception:
+                # Fallback for uncompressed tokens
+                return json.loads(raw_bytes.decode("utf-8"))
         except Exception as e:
             logger.debug(f"Token decryption failed: {e}")
             return None
@@ -571,7 +580,6 @@ def create_oauth_routes(token_manager: TokenManager) -> list:
                 "token": auth.token,
                 "sesskey": auth.sesskey,
                 "user_id": auth.user_id,
-                "user_profile": auth.user_profile,
                 "auth_type": "sso"
             }
             code = token_manager.create_auth_code(
@@ -665,7 +673,10 @@ def create_oauth_routes(token_manager: TokenManager) -> list:
                 }, status_code=400)
 
             tokens = token_manager.create_tokens(session_data)
-            return JSONResponse(tokens)
+            return JSONResponse(tokens, headers={
+                "Cache-Control": "no-store",
+                "Pragma": "no-cache",
+            })
 
         elif grant_type == "refresh_token":
             refresh_token = data.get("refresh_token")
@@ -703,14 +714,16 @@ def create_oauth_routes(token_manager: TokenManager) -> list:
                         "token": auth.token,
                         "sesskey": auth.sesskey,
                         "user_id": auth.user_id,
-                        "user_profile": auth.user_profile,
                         "auth_type": "sso"
                     })
                 except Exception as e:
                     logger.warning(f"Refresh token silent re-auth warning: {e}")
 
             tokens = token_manager.create_tokens(session_data)
-            return JSONResponse(tokens)
+            return JSONResponse(tokens, headers={
+                "Cache-Control": "no-store",
+                "Pragma": "no-cache",
+            })
 
         elif grant_type == "client_credentials":
             client_id = data.get("client_id", "")
@@ -743,11 +756,13 @@ def create_oauth_routes(token_manager: TokenManager) -> list:
                     "token": auth.token,
                     "sesskey": auth.sesskey,
                     "user_id": auth.user_id,
-                    "user_profile": auth.user_profile,
                     "auth_type": "sso"
                 }
                 tokens = token_manager.create_tokens(session_data)
-                return JSONResponse(tokens)
+                return JSONResponse(tokens, headers={
+                    "Cache-Control": "no-store",
+                    "Pragma": "no-cache",
+                })
             except Exception as e:
                 return JSONResponse({
                     "error": "invalid_grant",
@@ -761,6 +776,8 @@ def create_oauth_routes(token_manager: TokenManager) -> list:
 
     return [
         Route("/.well-known/oauth-protected-resource", oauth_protected_resource, methods=["GET"]),
+        Route("/.well-known/oauth-protected-resource/mcp", oauth_protected_resource, methods=["GET"]),
+        Route("/.well-known/oauth-protected-resource/{resource_path:path}", oauth_protected_resource, methods=["GET"]),
         Route("/.well-known/oauth-authorization-server", oauth_auth_server, methods=["GET"]),
         Route("/.well-known/openid-configuration", oauth_auth_server, methods=["GET"]),
         Route("/register", oauth_register, methods=["POST"]),
