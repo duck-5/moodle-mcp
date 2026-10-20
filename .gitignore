@@ -2,15 +2,74 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.egg-info/
-dist/
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
 .env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment files & credentials
 moodle_test_credentials.env
 *.env
 !*.env.example
+
+# Local session storage & tokens
 session.json
 .moodle_mcp/
+*.token
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
 .pytest_cache/
+cover/
+
+# IDE & editors
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Downloads / scratch files
+downloaded_*
+*.pdf
+!docs/*.pdf
