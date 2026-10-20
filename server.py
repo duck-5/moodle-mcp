@@ -9,7 +9,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 # Ensure package directory is always on sys.path
 _pkg_parent = str(Path(__file__).resolve().parent.parent)
@@ -33,14 +33,15 @@ from moodle_mcp.tools import register_all_tools
 logger = logging.getLogger("moodle_mcp")
 
 
-def create_server() -> Tuple[Any, Any, Any]:
-    """Initializes and configures the Moodle MCP server."""
+def create_server(profile: Optional[str] = None) -> Tuple[Any, Any, Any]:
+    """Initializes and configures the Moodle MCP server for a specific user profile."""
+    prof_name = profile or "default"
     server = MCPServer(
-        name="moodle_mcp"
+        name=f"moodle_mcp_{prof_name}" if prof_name != "default" else "moodle_mcp"
     )
 
-    auth = MoodleAuth()
-    client = MoodleClient(auth=auth)
+    auth = MoodleAuth(profile=profile)
+    client = MoodleClient(auth=auth, profile=profile)
     panopto = PanoptoManager(moodle_client=client)
 
     # Register all tools (courses, assignments, grades, files, meetings, recordings, quizzes, calendar, forums, participants, search)
@@ -141,58 +142,108 @@ def create_server() -> Tuple[Any, Any, Any]:
 
 def run_streamable_http_server(server: Any, host: str = "0.0.0.0", port: int = 8000) -> None:
     """
-    Runs the Streamable HTTP server configured for reverse proxies, web browsers,
-    and cloud tunnels (e.g. Cloudflare Tunnel at moodle-mcp.mantin.dev).
-    Provides full CORS headers, health checks, and dual routing on /mcp and /.
+    Runs the multi-profile Streamable HTTP server configured for reverse proxies,
+    web browsers, and cloud tunnels (e.g. Cloudflare Tunnel at moodle-mcp.mantin.dev).
+    Provides:
+    - Default profile on / and /mcp
+    - Dedicated profile routes on /{profile} and /{profile}/mcp (e.g. /yuval, /yaeli)
+    - Full CORS headers and health checks
     """
     import anyio
     import uvicorn
+    from contextlib import asynccontextmanager, AsyncExitStack
+    from starlette.applications import Starlette
     from starlette.middleware.cors import CORSMiddleware
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
+    from starlette.responses import JSONResponse, RedirectResponse
+    from starlette.routing import Route, Mount
     from mcp.server.transport_security import TransportSecuritySettings
     from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
+    from moodle_mcp.config import get_configured_profiles, sanitize_profile_name
 
-    # Disable strict host/origin validation to allow Cloudflare Tunnel and web clients
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=False,
         allowed_hosts=["*"],
         allowed_origins=["*"]
     )
 
-    async def health(req: Any) -> JSONResponse:
-        return JSONResponse({"status": "ok", "service": "moodle-mcp", "transport": "streamable-http"})
+    profiles = get_configured_profiles()
+    if "default" not in profiles:
+        profiles.append("default")
 
-    async def root_info(req: Any) -> JSONResponse:
+    session_managers = []
+    routes = []
+
+    def make_profile_app(prof_name: str, prof_server: Any) -> Starlette:
+        async def prof_info(req: Any) -> JSONResponse:
+            return JSONResponse({
+                "service": "moodle_mcp",
+                "profile": prof_name,
+                "version": "1.1.0",
+                "protocol": "Model Context Protocol (Streamable HTTP)",
+                "endpoints": {
+                    "mcp": f"/{prof_name}/mcp" if prof_name != "default" else "/mcp",
+                    "health": "/health"
+                },
+                "status": "online"
+            })
+
+        custom_routes = [
+            Route("/mcp", endpoint=prof_info, methods=["GET"]),
+            Route("/", endpoint=prof_info, methods=["GET"]),
+        ]
+
+        app = prof_server._lowlevel_server.streamable_http_app(
+            streamable_http_path="/mcp",
+            host=host,
+            transport_security=security,
+            custom_starlette_routes=custom_routes,
+        )
+
+        prof_mgr = prof_server._lowlevel_server._session_manager
+        if prof_mgr:
+            session_managers.append(prof_mgr)
+            app.routes.append(Route("/", endpoint=StreamableHTTPASGIApp(prof_mgr), methods=["POST"]))
+            app.routes.append(Route("/mcp", endpoint=StreamableHTTPASGIApp(prof_mgr), methods=["POST"]))
+
+        return app
+
+    # Build default app using the passed server
+    default_app = make_profile_app("default", server)
+
+    # Health check endpoint
+    async def health(req: Any) -> JSONResponse:
         return JSONResponse({
-            "service": "moodle_mcp",
-            "version": "1.1.0",
-            "protocol": "Model Context Protocol (Streamable HTTP)",
-            "endpoints": {
-                "mcp": "/mcp",
-                "health": "/health"
-            },
-            "status": "online"
+            "status": "ok",
+            "service": "moodle-mcp-multi-profile",
+            "profiles": [p for p in profiles if p != "default"],
+            "transport": "streamable-http"
         })
 
-    custom_routes = [
-        Route("/health", health, methods=["GET"]),
-        Route("/", root_info, methods=["GET"]),
-    ]
+    routes.append(Route("/health", health, methods=["GET"]))
 
-    starlette_app = server._lowlevel_server.streamable_http_app(
-        streamable_http_path="/mcp",
-        host=host,
-        transport_security=security,
-        custom_starlette_routes=custom_routes,
-    )
+    # Build and mount all other discovered profiles
+    for prof in profiles:
+        if prof == "default":
+            continue
+        p_server, _, _ = create_server(profile=prof)
+        p_app = make_profile_app(prof, p_server)
+        routes.append(Mount(f"/{prof}", p_app))
+        routes.append(Mount(f"/u/{prof}", p_app))
+        routes.append(Route(f"/{prof}", lambda req, p=prof: RedirectResponse(f"/{p}/")))
+        routes.append(Route(f"/u/{prof}", lambda req, p=prof: RedirectResponse(f"/u/{p}/")))
 
-    session_mgr = server._lowlevel_server._session_manager
-    # Support Streamable HTTP requests posted directly to root as well as /mcp
-    starlette_app.routes.append(Route("/", endpoint=StreamableHTTPASGIApp(session_mgr), methods=["POST"]))
+    # Mount default app at root (must be last)
+    routes.append(Mount("/", default_app))
 
-    # Add CORS middleware for browser-based web clients (e.g. Gemini Web UI)
-    starlette_app.add_middleware(
+    @asynccontextmanager
+    async def lifespan(app: Starlette):
+        async with AsyncExitStack() as stack:
+            for mgr in session_managers:
+                await stack.enter_async_context(mgr.run())
+            yield
+
+    master_app = Starlette(routes=routes, lifespan=lifespan)
+    master_app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_credentials=True,
@@ -201,10 +252,14 @@ def run_streamable_http_server(server: Any, host: str = "0.0.0.0", port: int = 8
         expose_headers=["mcp-session-id"],
     )
 
-    print(f"🚀 Starting Moodle MCP Streamable HTTP Server on http://{host}:{port}")
-    print(f"   MCP Endpoint: http://{host}:{port}/mcp (or root /)")
+    print(f"🚀 Starting Moodle MCP Multi-Profile Server on http://{host}:{port}")
+    print(f"   Default Endpoint: http://{host}:{port}/mcp (or root /)")
+    for prof in profiles:
+        if prof != "default":
+            print(f"   Profile '{prof}': http://{host}:{port}/{prof}/mcp (or /{prof})")
     print(f"   Health Check: http://{host}:{port}/health")
-    config = uvicorn.Config(starlette_app, host=host, port=port, log_level="info")
+
+    config = uvicorn.Config(master_app, host=host, port=port, log_level="info")
     uv_server = uvicorn.Server(config)
     anyio.run(uv_server.serve)
 

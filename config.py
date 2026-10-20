@@ -76,6 +76,39 @@ def get_profile_paths(profile: Optional[str] = None) -> Dict[str, Path]:
     }
 
 
+def get_configured_profiles() -> list[str]:
+    """
+    Discovers all configured profile names from environment variables and storage:
+    - Profiles explicitly listed in MOODLE_PROFILES (comma-separated, e.g. 'yuval,yaeli')
+    - Variables matching '{PROFILE}_MOODLE_USERNAME' (e.g. YUVAL_MOODLE_USERNAME)
+    - Existing profile directories in ~/.moodle_mcp/profiles/
+    - Default profile
+    """
+    profiles = set()
+    env_profiles = os.getenv("MOODLE_PROFILES", "")
+    if env_profiles:
+        for p in env_profiles.split(","):
+            p_clean = sanitize_profile_name(p.strip())
+            if p_clean:
+                profiles.add(p_clean)
+
+    for k in os.environ.keys():
+        if k.endswith("_MOODLE_USERNAME") and k != "MOODLE_USERNAME":
+            p_clean = sanitize_profile_name(k.replace("_MOODLE_USERNAME", "").lower())
+            if p_clean:
+                profiles.add(p_clean)
+
+    if PROFILES_DIR.is_dir():
+        for item in PROFILES_DIR.iterdir():
+            if item.is_dir() and not item.name.startswith("."):
+                profiles.add(sanitize_profile_name(item.name))
+
+    if MOODLE_PROFILE:
+        profiles.add(sanitize_profile_name(MOODLE_PROFILE))
+    profiles.add("default")
+    return sorted(list(profiles))
+
+
 _default_paths = get_profile_paths(MOODLE_PROFILE)
 SESSION_FILE = Path(os.getenv("MOODLE_SESSION_FILE", str(_default_paths["session_file"])))
 CACHE_FILE = Path(os.getenv("MOODLE_CACHE_FILE", str(_default_paths["cache_file"])))

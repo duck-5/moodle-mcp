@@ -521,32 +521,55 @@ class MoodleAuth:
         if not force_refresh and self.load_cached_session():
             return True
 
+        prof_prefix = f"{self.profile.upper()}_MOODLE" if self.profile != "default" else ""
+        prof_suffix = f"MOODLE_{self.profile.upper()}" if self.profile != "default" else ""
+
         # Check environment for direct token
-        if MOODLE_TOKEN:
+        token = (
+            (os.getenv(f"{prof_prefix}_TOKEN") or os.getenv(f"{prof_suffix}_TOKEN"))
+            if prof_prefix else None
+        ) or (MOODLE_TOKEN if self.profile == "default" else None) or os.getenv("MOODLE_TOKEN")
+        if token:
             try:
-                self.login_with_token(MOODLE_TOKEN)
+                self.login_with_token(token)
                 return True
             except Exception as e:
-                logger.warning(f"Failed to login with MOODLE_TOKEN from env: {e}")
+                logger.warning(f"Failed to login with token for profile '{self.profile}': {e}")
 
         # Check environment for cookie
-        if MOODLE_SESSION_COOKIE:
+        cookie = (
+            (os.getenv(f"{prof_prefix}_SESSION_COOKIE") or os.getenv(f"{prof_suffix}_SESSION_COOKIE"))
+            if prof_prefix else None
+        ) or (MOODLE_SESSION_COOKIE if self.profile == "default" else None) or os.getenv("MOODLE_SESSION_COOKIE")
+        if cookie:
             try:
-                self.login_with_cookie(MOODLE_SESSION_COOKIE)
+                self.login_with_cookie(cookie)
                 return True
             except Exception as e:
-                logger.warning(f"Failed to login with MOODLE_SESSION_COOKIE from env: {e}")
+                logger.warning(f"Failed to login with cookie for profile '{self.profile}': {e}")
 
         # Check environment for SSO credentials
-        username = MOODLE_USERNAME or os.getenv("MOODLE_TESTING_USERNAME")
-        password = MOODLE_PASSWORD or os.getenv("MOODLE_TESTING_PASSWORD")
-        student_id = MOODLE_STUDENT_ID or os.getenv("MOODLE_TESTING_ID")
+        username = (
+            (os.getenv(f"{prof_prefix}_USERNAME") or os.getenv(f"{prof_suffix}_USERNAME"))
+            if prof_prefix else None
+        ) or (MOODLE_USERNAME if self.profile == "default" else None) or os.getenv("MOODLE_TESTING_USERNAME")
+
+        password = (
+            (os.getenv(f"{prof_prefix}_PASSWORD") or os.getenv(f"{prof_suffix}_PASSWORD"))
+            if prof_prefix else None
+        ) or (MOODLE_PASSWORD if self.profile == "default" else None) or os.getenv("MOODLE_TESTING_PASSWORD")
+
+        student_id = (
+            (os.getenv(f"{prof_prefix}_STUDENT_ID") or os.getenv(f"{prof_suffix}_STUDENT_ID"))
+            if prof_prefix else None
+        ) or (MOODLE_STUDENT_ID if self.profile == "default" else None) or os.getenv("MOODLE_TESTING_ID")
+
         if username and password:
             try:
                 self.login_with_sso(username, password, student_id)
                 return True
             except Exception as e:
-                logger.warning(f"Failed to auto-login with SSO credentials from env: {e}")
+                logger.warning(f"Failed to auto-login with SSO credentials for profile '{self.profile}': {e}")
 
         return False
 
