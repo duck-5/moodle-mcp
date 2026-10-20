@@ -139,6 +139,76 @@ def create_server() -> Tuple[Any, Any, Any]:
     return server, client, panopto
 
 
+def run_streamable_http_server(server: Any, host: str = "0.0.0.0", port: int = 8000) -> None:
+    """
+    Runs the Streamable HTTP server configured for reverse proxies, web browsers,
+    and cloud tunnels (e.g. Cloudflare Tunnel at moodle-mcp.mantin.dev).
+    Provides full CORS headers, health checks, and dual routing on /mcp and /.
+    """
+    import anyio
+    import uvicorn
+    from starlette.middleware.cors import CORSMiddleware
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+    from mcp.server.transport_security import TransportSecuritySettings
+    from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
+
+    # Disable strict host/origin validation to allow Cloudflare Tunnel and web clients
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+        allowed_hosts=["*"],
+        allowed_origins=["*"]
+    )
+
+    async def health(req: Any) -> JSONResponse:
+        return JSONResponse({"status": "ok", "service": "moodle-mcp", "transport": "streamable-http"})
+
+    async def root_info(req: Any) -> JSONResponse:
+        return JSONResponse({
+            "service": "moodle_mcp",
+            "version": "1.1.0",
+            "protocol": "Model Context Protocol (Streamable HTTP)",
+            "endpoints": {
+                "mcp": "/mcp",
+                "health": "/health"
+            },
+            "status": "online"
+        })
+
+    custom_routes = [
+        Route("/health", health, methods=["GET"]),
+        Route("/", root_info, methods=["GET"]),
+    ]
+
+    starlette_app = server._lowlevel_server.streamable_http_app(
+        streamable_http_path="/mcp",
+        host=host,
+        transport_security=security,
+        custom_starlette_routes=custom_routes,
+    )
+
+    session_mgr = server._lowlevel_server._session_manager
+    # Support Streamable HTTP requests posted directly to root as well as /mcp
+    starlette_app.routes.append(Route("/", endpoint=StreamableHTTPASGIApp(session_mgr), methods=["POST"]))
+
+    # Add CORS middleware for browser-based web clients (e.g. Gemini Web UI)
+    starlette_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["mcp-session-id"],
+    )
+
+    print(f"🚀 Starting Moodle MCP Streamable HTTP Server on http://{host}:{port}")
+    print(f"   MCP Endpoint: http://{host}:{port}/mcp (or root /)")
+    print(f"   Health Check: http://{host}:{port}/health")
+    config = uvicorn.Config(starlette_app, host=host, port=port, log_level="info")
+    uv_server = uvicorn.Server(config)
+    anyio.run(uv_server.serve)
+
+
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         try:
@@ -271,7 +341,7 @@ def main() -> None:
         server.run(transport="stdio")
     elif args.transport == "streamable-http":
         logging.basicConfig(level=logging.INFO)
-        server.run(transport="streamable-http", host=args.host, port=args.port)
+        run_streamable_http_server(server, host=args.host, port=args.port)
     else:
         logging.basicConfig(level=logging.INFO)
         server.run(transport="sse", host=args.host, port=args.port)

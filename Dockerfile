@@ -32,5 +32,5 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8000 \
     HOST=0.0.0.0
 
-# Run OpenAPI REST server with Swagger UI and /openapi.json by default
-CMD ["python", "-m", "moodle_mcp", "--mode", "openapi", "--host", "0.0.0.0", "--port", "8000"]
+# Run Streamable HTTP MCP server by default (with /mcp and / routes, CORS, and /health)
+CMD ["python", "-m", "moodle_mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000"]
