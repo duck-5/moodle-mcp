@@ -46,6 +46,28 @@ class TestServerTools(unittest.TestCase):
         self.assertEqual(len(res.content), 1, "Empty list must be serialized into exactly 1 TextContent block")
         self.assertEqual(res.content[0].text, "[]")
 
+    def test_dashboard_and_additional_tools_registered(self):
+        server, client, panopto = create_server()
+        dash_tool = server._tool_manager.get_tool("moodle_get_dashboard")
+        self.assertIsNotNone(dash_tool)
+        extra_tool = server._tool_manager.get_tool("moodle_additional_tools")
+        self.assertIsNotNone(extra_tool)
+
+    def test_fuzzy_course_resolution(self):
+        server, client, panopto = create_server()
+        client.auth.user_id = 999
+        # Mock courses in cache for client
+        mock_courses = [
+            {"id": 101, "display_name": "0321 - Waves", "fullname": "Waves Full", "shortname": "0321"},
+            {"id": 202, "display_name": "0368 - Data Structures", "fullname": "Data Structures", "shortname": "0368"}
+        ]
+        client.cache.set("courses_999", mock_courses)
+        
+        self.assertEqual(client.resolve_course_id(101), 101)
+        self.assertEqual(client.resolve_course_id("101"), 101)
+        self.assertEqual(client.resolve_course_id("Waves"), 101)
+        self.assertEqual(client.resolve_course_id("structures"), 202)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,40 +2,51 @@
 Course discovery and course contents MCP tools.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from moodle_mcp.client import MoodleClient
 
 
 def register_courses_tools(server: Any, client: MoodleClient) -> None:
-    @server.tool()
+    @server.tool(
+        name="moodle_get_enrolled_courses",
+        description="Retrieves enrolled courses with course IDs, codes, names, and semester breakdown."
+    )
     def moodle_get_enrolled_courses(
         semester: Optional[str] = None,
+        academic_only: bool = True,
         refresh: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Retrieves all courses the user is enrolled in, enriched with course code, group ID,
-        academic year, and semester breakdown. Automatically cached for fast responses.
+        Retrieves enrolled courses. Automatically cached.
         
         Args:
-            semester: Optional filter by semester name (e.g. 'Semester A', 'Semester B', 'Yearly').
-            refresh: If True, bypasses local cache and fetches fresh data from Moodle.
+            semester: Optional semester filter (e.g. 'Semester A', 'Semester B', 'Yearly').
+            academic_only: If True (default), filters out university mandatory compliance/safety tutorials.
+            refresh: If True, fetches live data bypassing cache.
         """
-        courses = client.get_enrolled_courses(refresh=refresh)
+        courses = client.get_enrolled_courses(refresh=refresh, academic_only=academic_only)
         if semester:
             courses = [c for c in courses if semester.lower() in c.get("semester", "").lower()]
         return courses
 
-    @server.tool()
+    @server.tool(
+        name="moodle_get_course_contents",
+        description="Retrieves section syllabus, modules, and links for a course."
+    )
     def moodle_get_course_contents(
-        course_id: int,
+        course: Optional[Union[int, str]] = None,
+        course_id: Optional[int] = None,
         refresh: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> Any:
         """
-        Retrieves the complete section-by-section syllabus and contents of a Moodle course,
-        including all sections, assignments, resources, quizzes, and file links.
+        Retrieves syllabus sections and contents of a course.
         
         Args:
-            course_id: The integer Moodle course ID (e.g. 12345).
-            refresh: If True, bypasses local cache and fetches fresh contents from Moodle.
+            course: Course ID or partial name (e.g. 'Waves', 'Data Structures', 321210299).
+            course_id: Deprecated numeric course ID fallback.
+            refresh: If True, fetches fresh contents from Moodle.
         """
-        return client.get_course_contents(course_id, refresh=refresh)
+        cid = client.resolve_course_id(course if course is not None else course_id)
+        if not cid:
+            return {"error": f"Course '{course or course_id}' could not be found."}
+        return client.get_course_contents(cid, refresh=refresh)

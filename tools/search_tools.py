@@ -8,7 +8,10 @@ from moodle_mcp.panopto import PanoptoManager
 
 
 def register_search_tools(server: Any, client: MoodleClient, panopto: PanoptoManager) -> None:
-    @server.tool()
+    @server.tool(
+        name="moodle_search",
+        description="Searches courses, assignments, files, and resources by keyword."
+    )
     def moodle_search(
         query: str,
         search_types: Optional[List[str]] = None

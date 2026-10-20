@@ -64,6 +64,21 @@ def parse_course_metadata(course: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def is_academic_course(c: Dict[str, Any]) -> bool:
+    """Checks whether a course is an academic course or university safety/compliance tutorial."""
+    if "is_academic" in c and c["is_academic"] is not None:
+        return bool(c["is_academic"])
+    cid_str = str(c.get("id", ""))
+    idnum_str = str(c.get("idnumber", ""))
+    fullname = c.get("fullname", "")
+    return not (
+        cid_str.startswith("5900")
+        or idnum_str.startswith("5900")
+        or "בטיחות" in fullname
+        or "לומדת" in fullname
+    )
+
+
 def clean_course_name(shortname: str, fullname: str) -> str:
     """Extracts a clean human-readable course name."""
     parts = shortname.split("-")
@@ -153,17 +168,20 @@ class MoodleClient:
             self.auth.user_profile = data
         return data
 
-    def get_enrolled_courses(self, refresh: bool = False) -> List[Dict[str, Any]]:
+    def get_enrolled_courses(self, refresh: bool = False, academic_only: bool = False) -> List[Dict[str, Any]]:
         """Retrieves all courses the current user is enrolled in."""
-        if not self.auth.user_id:
-            info = self.get_site_info()
-            self.auth.user_id = info.get("userid")
-
-        cache_key = f"courses_{self.auth.user_id}"
+        cache_key = f"courses_{self.auth.user_id or 0}"
         if not refresh:
             cached = self.cache.get(cache_key, max_age=CACHE_TTL_COURSES)
             if cached is not None:
+                if academic_only:
+                    return [c for c in cached if is_academic_course(c)]
                 return cached
+
+        if not self.auth.user_id:
+            info = self.get_site_info()
+            self.auth.user_id = info.get("userid")
+            cache_key = f"courses_{self.auth.user_id or 0}"
 
         courses = self._call_ws("core_enrol_get_users_courses", {"userid": self.auth.user_id})
         if not isinstance(courses, list):
@@ -173,6 +191,8 @@ class MoodleClient:
         for c in courses:
             meta = parse_course_metadata(c)
             clean_name = clean_course_name(c.get("shortname", ""), c.get("fullname", ""))
+            is_academic = is_academic_course(c)
+
             c_info = {
                 "id": c.get("id"),
                 "shortname": c.get("shortname"),
@@ -184,12 +204,41 @@ class MoodleClient:
                 "visible": bool(c.get("visible", 1)),
                 "semester": meta["semester_name"] if meta else "Other",
                 "academic_year": meta["year"] if meta else "",
+                "is_academic": is_academic,
                 "metadata": meta
             }
             enriched.append(c_info)
 
         self.cache.set(cache_key, enriched)
+        if academic_only:
+            return [c for c in enriched if is_academic_course(c)]
         return enriched
+
+    def resolve_course_id(self, course_identifier: Any) -> Optional[int]:
+        """
+        Resolves a course identifier (numeric ID or partial course name) to an integer course ID.
+        Supports fuzzy name matching in Hebrew and English.
+        """
+        if course_identifier is None:
+            return None
+        if isinstance(course_identifier, int):
+            return course_identifier
+        
+        s = str(course_identifier).strip()
+        if s.isdigit():
+            return int(s)
+
+        courses = self.get_enrolled_courses()
+        q = s.lower()
+        # 1. Exact match on ID or code
+        for c in courses:
+            if q == str(c.get("id")) or q == str(c.get("idnumber", "")).lower():
+                return c["id"]
+        # 2. Substring match on display_name or fullname
+        for c in courses:
+            if q in c.get("display_name", "").lower() or q in c.get("fullname", "").lower():
+                return c["id"]
+        return None
 
     def get_course_contents(self, course_id: int, refresh: bool = False) -> List[Dict[str, Any]]:
         """Retrieves the full syllabus and sections/modules of a course."""
@@ -715,6 +764,8 @@ class MoodleClient:
         # Determine extension
         path_clean = file_url.split("?")[0].lower()
         is_pdf = path_clean.endswith(".pdf") or "pdf" in content_type
+        is_docx = path_clean.endswith(".docx") or "officedocument.wordprocessingml" in content_type
+        is_pptx = path_clean.endswith(".pptx") or "officedocument.presentationml" in content_type
 
         extracted_text = ""
         doc_type = "text"
@@ -730,6 +781,33 @@ class MoodleClient:
                 extracted_text = "\n\n--- Page Break ---\n\n".join(pages)
             except Exception as e:
                 extracted_text = f"[Could not parse PDF using PyMuPDF: {e}]"
+        elif is_docx:
+            doc_type = "docx"
+            try:
+                import io, zipfile, xml.etree.ElementTree as ET
+                with zipfile.ZipFile(io.BytesIO(content_bytes)) as z:
+                    xml_content = z.read("word/document.xml")
+                    tree = ET.fromstring(xml_content)
+                    texts = [node.text for node in tree.iter() if node.tag.endswith("}t") and node.text]
+                    extracted_text = " ".join(texts)
+            except Exception as e:
+                extracted_text = f"[Could not parse DOCX: {e}]"
+        elif is_pptx:
+            doc_type = "pptx"
+            try:
+                import io, zipfile, xml.etree.ElementTree as ET
+                with zipfile.ZipFile(io.BytesIO(content_bytes)) as z:
+                    slide_files = sorted([f for f in z.namelist() if f.startswith("ppt/slides/slide") and f.endswith(".xml")])
+                    slides_text = []
+                    for idx, sfile in enumerate(slide_files):
+                        s_xml = z.read(sfile)
+                        tree = ET.fromstring(s_xml)
+                        texts = [node.text for node in tree.iter() if node.tag.endswith("}t") and node.text]
+                        if texts:
+                            slides_text.append(f"--- Slide {idx+1} ---\n" + "\n".join(texts))
+                    extracted_text = "\n\n".join(slides_text)
+            except Exception as e:
+                extracted_text = f"[Could not parse PPTX: {e}]"
         else:
             # Attempt decoding as text / html
             try:
@@ -1028,4 +1106,32 @@ class MoodleClient:
         # Put lecturers and TAs first
         participants.sort(key=lambda x: not x["is_staff"])
         return participants
+
+    def get_dashboard(self, days_ahead: int = 14) -> Dict[str, Any]:
+        """
+        Retrieves a unified high-level academic briefing in a single call:
+        active academic courses, upcoming assignment deadlines, active quizzes,
+        upcoming calendar events, and recent course announcements.
+        """
+        academic_courses = self.get_enrolled_courses(academic_only=True)
+        upcoming_assigns = self.get_upcoming_assignments(days_ahead=days_ahead)
+        quizzes = self.get_quizzes()
+        active_quizzes = [q for q in quizzes if q.get("is_active", True) and not q.get("is_closed", False)]
+        calendar_events = self.get_calendar_events(days_ahead=days_ahead)
+        announcements = self.get_course_announcements()[:5]
+
+        return {
+            "academic_courses_count": len(academic_courses),
+            "academic_courses": [
+                {"id": c["id"], "name": c["display_name"], "semester": c.get("semester")}
+                for c in academic_courses
+            ],
+            "upcoming_deadlines_count": len(upcoming_assigns),
+            "upcoming_deadlines": upcoming_assigns,
+            "active_quizzes_count": len(active_quizzes),
+            "active_quizzes": active_quizzes,
+            "upcoming_events_count": len(calendar_events),
+            "upcoming_events": calendar_events,
+            "recent_announcements": announcements
+        }
 
