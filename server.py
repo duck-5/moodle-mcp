@@ -103,13 +103,11 @@ patch_mcp_list_serialization()
 def patch_uvicorn_h11() -> None:
     """
     Patches h11 protocol in Uvicorn to:
-    1. Increase default incomplete event buffer size to 64KB (preventing RemoteProtocolError
-       on large HTTP headers/tokens).
-    2. Provide detailed diagnostic logging when an invalid HTTP request is encountered.
+    Increase default incomplete event buffer size to 64KB (preventing RemoteProtocolError
+    on large HTTP headers/tokens).
     """
     try:
         import h11
-        from uvicorn.protocols.http import h11_impl
 
         orig_init = h11.Connection.__init__
 
@@ -117,77 +115,6 @@ def patch_uvicorn_h11() -> None:
             orig_init(self, our_role, max_incomplete_event_size=max_incomplete_event_size)
 
         h11.Connection.__init__ = patched_connection_init
-
-        def verbose_handle_events(self):
-            while True:
-                try:
-                    event = self.conn.next_event()
-                except h11.RemoteProtocolError as exc:
-                    raw_buf = bytes(getattr(self.conn, "_receive_buffer", b""))
-                    self.logger.warning(
-                        f"Invalid HTTP request received: {exc!r}. Buffer preview: {raw_buf[:300]!r}"
-                    )
-                    self.send_400_response("Invalid HTTP request received.")
-                    return
-
-                if event is h11.NEED_DATA:
-                    break
-                elif event is h11.PAUSED:
-                    self.flow.pause_reading()
-                    break
-                elif isinstance(event, h11.Request):
-                    self.headers = [(k.decode("ascii"), v.decode("ascii", errors="replace")) for k, v in event.headers]
-                    self.scope = {
-                        "type": "http",
-                        "asgi": {"version": "3.0", "spec_version": "2.3"},
-                        "http_version": event.http_version.decode("ascii"),
-                        "server": self.server,
-                        "client": self.client,
-                        "scheme": self.scheme,
-                        "method": event.method.decode("ascii"),
-                        "root_path": self.root_path,
-                        "path": h11_impl.unquote(event.target.decode("ascii")),
-                        "raw_path": event.target,
-                        "query_string": b"",
-                        "headers": [(k.lower(), v) for k, v in event.headers],
-                    }
-                    if b"?" in event.target:
-                        path_bytes, query_bytes = event.target.split(b"?", 1)
-                        self.scope["path"] = h11_impl.unquote(path_bytes.decode("ascii"))
-                        self.scope["query_string"] = query_bytes
-
-                    upgrade = h11_impl._get_upgrade(self.headers)
-                    if upgrade == "websocket" and self._should_upgrade_to_ws():
-                        self.handle_websocket_upgrade(event)
-                        return
-
-                    self.cycle = h11_impl.RequestResponseCycle(
-                        scope=self.scope,
-                        conn=self.conn,
-                        transport=self.transport,
-                        flow=self.flow,
-                        logger=self.logger,
-                        access_logger=self.access_logger,
-                        access_log=self.access_log,
-                        default_headers=self.default_headers,
-                        message_event=self.message_event,
-                        expect_100_continue=self.conn.client_is_waiting_for_100_continue,
-                        keep_alive=h11_impl.http_version.should_keep_alive(event.http_version, self.headers),
-                        on_response=self.on_response_complete,
-                    )
-                    self.loop.create_task(self.cycle.run_asgi(self.app))
-                elif isinstance(event, h11.Data):
-                    if self.cycle is not None:
-                        self.cycle.body += event.data
-                        if self.cycle.body_event is not None and not self.cycle.body_event.is_set():
-                            self.cycle.body_event.set()
-                elif isinstance(event, h11.EndOfMessage):
-                    if self.cycle is not None:
-                        self.cycle.more_body = False
-                        if self.cycle.body_event is not None and not self.cycle.body_event.is_set():
-                            self.cycle.body_event.set()
-
-        h11_impl.H11Protocol.handle_events = verbose_handle_events
     except Exception as e:
         logger.warning(f"Could not patch uvicorn h11 protocol: {e}")
 
