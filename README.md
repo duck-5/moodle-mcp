@@ -43,13 +43,15 @@ Supports both **Native FastMCP / MCPServer** (stdio, SSE, streamable-http) and *
 3. [Installation](#-installation)
 4. [Configuration (.env)](#-configuration-env)
 5. [Connecting AI Providers](#-connecting-ai-providers)
-   - [Claude Desktop (Native MCP)](#1-claude-desktop-native-mcp)
-   - [Claude Desktop (OpenAPI MCP Approach)](#2-claude-desktop-openapi-mcp-approach)
-   - [Cursor IDE](#3-cursor-ide)
-   - [Antigravity](#4-antigravity)
-   - [AWS Labs OpenAPI MCP Server](#5-aws-labs-openapi-mcp-server)
-   - [Cline / Roo Code / Windsurf](#6-cline--roo-code--windsurf)
-   - [Python / LangChain / OpenAI](#7-python--langchain--openai)
+   - [Google Gemini (Native Agent & Function Calling)](#1-google-gemini-native-agent--function-calling)
+   - [Claude Desktop (Native MCP)](#2-claude-desktop-native-mcp)
+   - [Claude Desktop (OpenAPI MCP Approach)](#3-claude-desktop-openapi-mcp-approach)
+   - [Cursor IDE](#4-cursor-ide)
+   - [Antigravity](#5-antigravity)
+   - [AWS Labs OpenAPI MCP Server](#6-aws-labs-openapi-mcp-server)
+   - [Cline / Roo Code / Windsurf](#7-cline--roo-code--windsurf)
+   - [Docker & Homelab Deployment](#8-docker--homelab-deployment)
+   - [Python / LangChain / OpenAI](#9-python--langchain--openai)
 6. [Tool Reference](#-tool-reference)
 7. [Resources & Prompts](#-resources--prompts)
 8. [CLI Options](#-cli-options)
@@ -207,7 +209,62 @@ TIMEZONE=Asia/Jerusalem
 
 ## 🤖 Connecting AI Providers
 
-### 1. Claude Desktop (Native MCP)
+### 1. Google Gemini (Native Agent & Function Calling)
+
+`moodle_mcp` includes native support for Google Gemini via the official `google-genai` SDK and dynamic function calling. Gemini connects to your Moodle session, inspects course contents, evaluates assignment deadlines, and queries your grades.
+
+#### Setup:
+1. Obtain an API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. Add your key to `.env`:
+   ```bash
+   GEMINI_API_KEY=AIzaSy...
+   GEMINI_MODEL=gemini-2.5-flash
+   ```
+
+#### Interactive Chat Mode:
+Start an interactive terminal conversation where Gemini automatically invokes Moodle tools:
+```bash
+# Using CLI entrypoint
+python -m moodle_mcp --mode gemini
+
+# Or using console script
+moodle-mcp-gemini
+```
+
+Example interaction:
+```
+🎓 Moodle Gemini Assistant — Active (Model: gemini-2.5-flash)
+Connected to Moodle instance: https://moodle.tau.ac.il
+
+👤 You: What assignments are due in the next 10 days?
+🤖 Gemini is thinking...
+You have 2 pending assignments due within the next 10 days:
+1. Introduction to Quantum Mechanics — Problem Set 3
+   • Due: Sunday, Nov 2, 23:59 (4 days remaining)
+   • Status: Not submitted
+2. Operating Systems — Assignment 2 (Thread Pools)
+   • Due: Thursday, Nov 6, 23:59 (8 days remaining)
+   • Status: Draft saved
+```
+
+#### Single Query CLI Mode:
+Ask a single question and receive an immediate answer:
+```bash
+python -m moodle_mcp --mode gemini --prompt "Summarize my grades across all courses"
+```
+
+#### Programmatic Python Usage:
+```python
+from moodle_mcp.gemini_client import MoodleGeminiAgent
+
+agent = MoodleGeminiAgent()
+response = agent.query_once("What are my deadlines this week?")
+print(response)
+```
+
+---
+
+### 2. Claude Desktop (Native MCP)
 
 Add `moodle` to your `claude_desktop_config.json`:
 
@@ -239,7 +296,7 @@ Restart Claude Desktop, and click the 🔨 hammer icon to see all Moodle tools!
 
 ---
 
-### 2. Claude Desktop (OpenAPI MCP Approach)
+### 3. Claude Desktop (OpenAPI MCP Approach)
 
 Start the OpenAPI server (`python -m moodle_mcp --mode openapi --port 8000`) and configure:
 
@@ -260,7 +317,7 @@ Start the OpenAPI server (`python -m moodle_mcp --mode openapi --port 8000`) and
 
 ---
 
-### 3. Cursor IDE
+### 4. Cursor IDE
 
 In Cursor, go to **Settings** -> **Features** -> **MCP**, or edit `.cursor/mcp.json`:
 
@@ -277,7 +334,7 @@ In Cursor, go to **Settings** -> **Features** -> **MCP**, or edit `.cursor/mcp.j
 
 ---
 
-### 4. Antigravity
+### 5. Antigravity
 
 In your Antigravity project configuration:
 
@@ -294,7 +351,7 @@ In your Antigravity project configuration:
 
 ---
 
-### 5. AWS Labs OpenAPI MCP Server
+### 6. AWS Labs OpenAPI MCP Server
 
 ```json
 {
@@ -313,7 +370,7 @@ In your Antigravity project configuration:
 
 ---
 
-### 6. Cline / Roo Code / Windsurf
+### 7. Cline / Roo Code / Windsurf
 
 Configure in `cline_mcp_settings.json`:
 ```json
@@ -337,7 +394,35 @@ Configure in `cline_mcp_settings.json`:
 
 ---
 
-### 7. Python / LangChain / OpenAI
+### 8. Docker & Homelab Deployment
+
+Deploy `moodle_mcp` as a zero-trust container attached to `mcp-gateway-net` and exposed via Cloudflare Tunnel:
+
+```bash
+# Build and start in background
+docker compose up -d
+
+# Check health status
+docker compose ps
+curl http://localhost:8000/health
+```
+
+#### Run Gemini Agent Inside Docker:
+```bash
+docker compose exec moodle-mcp python -m moodle_mcp --mode gemini
+```
+
+#### Cloudflare Tunnel Exposure:
+Point your Cloudflare Tunnel hostname (`moodle.yourdomain.com`) to:
+`http://moodle-mcp:8000`
+
+This instantly provides:
+- Live Swagger UI at `https://moodle.yourdomain.com/docs`
+- OpenAPI Specification at `https://moodle.yourdomain.com/openapi.json` for Vertex AI Extensions or external LLMs.
+
+---
+
+### 9. Python / LangChain / OpenAI
 
 Run the server over SSE or streamable-http for networked AI agents:
 
@@ -423,6 +508,12 @@ python -m moodle_mcp --status
 
 # Interactive SSO login CLI (prompts for password securely)
 python -m moodle_mcp --login-sso
+
+# Interactive Gemini AI assistant with real-time Moodle tool calling
+python -m moodle_mcp --mode gemini
+
+# One-off Gemini question from terminal
+python -m moodle_mcp --mode gemini --prompt "What deadlines do I have next week?"
 
 # Run standard stdio MCP server (for Claude Desktop, Cursor, Antigravity)
 python -m moodle_mcp --transport stdio

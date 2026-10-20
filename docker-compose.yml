@@ -1,0 +1,31 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  moodle-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: moodle-mcp
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/root/.moodle_mcp
+    networks:
+      - mcp-gateway-net
+    logging: *default-logging
+
+networks:
+  mcp-gateway-net:
+    external: true

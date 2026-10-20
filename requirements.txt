@@ -8,3 +8,5 @@ pymupdf>=1.24.0
 fastapi>=0.115.0
 uvicorn>=0.22.0
 pyyaml>=6.0
+google-genai>=1.0.0
+

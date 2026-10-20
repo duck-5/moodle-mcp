@@ -32,12 +32,14 @@ dependencies = [
     "pymupdf>=1.24.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.22.0",
-    "pyyaml>=6.0"
+    "pyyaml>=6.0",
+    "google-genai>=1.0.0"
 ]
 
 [project.scripts]
 moodle-mcp = "moodle_mcp.server:main"
 moodle-mcp-openapi = "moodle_mcp.openapi_server:main"
+moodle-mcp-gemini = "moodle_mcp.gemini_client:main"
 
 [tool.setuptools]
 package-dir = {"moodle_mcp" = "."}

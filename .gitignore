@@ -43,6 +43,7 @@ moodle_test_credentials.env
 # Local session storage & tokens
 session.json
 .moodle_mcp/
+data/
 *.token
 
 # Unit test / coverage

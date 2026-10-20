@@ -155,9 +155,21 @@ def main() -> None:
 
     parser.add_argument(
         "--mode",
-        choices=["mcp", "openapi"],
+        choices=["mcp", "openapi", "gemini"],
         default="mcp",
-        help="Server mode: 'mcp' (standard MCP server) or 'openapi' (FastAPI REST server compliant with OpenAPI 3.1)"
+        help="Server mode: 'mcp' (standard MCP server), 'openapi' (FastAPI REST server compliant with OpenAPI 3.1), or 'gemini' (Gemini AI agent with Moodle tools)"
+    )
+    parser.add_argument(
+        "--prompt", "-p",
+        type=str,
+        default=None,
+        help="Prompt query for Gemini mode (runs single question and exits)"
+    )
+    parser.add_argument(
+        "--gemini-model",
+        type=str,
+        default=None,
+        help="Model name for Gemini agent (default: gemini-2.5-flash or $GEMINI_MODEL)"
     )
     parser.add_argument(
         "--transport",
@@ -202,6 +214,20 @@ def main() -> None:
         out_dir = Path(args.export_openapi).resolve()
         json_file = export_openapi_spec(out_dir)
         print(f"[OK] Exported OpenAPI specification to {json_file}")
+        sys.exit(0)
+
+    # Handle Gemini mode
+    if args.mode == "gemini":
+        try:
+            from moodle_mcp.gemini_client import MoodleGeminiAgent
+        except ImportError:
+            from gemini_client import MoodleGeminiAgent
+        agent = MoodleGeminiAgent(model_name=args.gemini_model)
+        if args.prompt:
+            res = agent.query_once(args.prompt)
+            print(res)
+        else:
+            agent.run_chat()
         sys.exit(0)
 
     # Handle OpenAPI server mode
