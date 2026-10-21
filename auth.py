@@ -29,6 +29,7 @@ from moodle_mcp.config import (
     USER_AGENT,
     sanitize_profile_name,
     get_profile_paths,
+    get_primary_profile,
 )
 
 logger = logging.getLogger("moodle_mcp.auth")
@@ -93,21 +94,29 @@ class MoodleAuth:
         """Loads and validates a cached session from disk if available."""
         target_file = self.session_file
         if not target_file.exists():
-            # Fallback to legacy root session.json if migrating a single-user setup
-            legacy_file = SESSION_DIR / "session.json"
-            if legacy_file.exists():
-                try:
-                    with open(legacy_file, "r", encoding="utf-8") as lf:
-                        legacy_data = json.load(lf)
-                    legacy_user = (legacy_data.get("user_profile") or {}).get("username", "")
-                    if self.profile == "default" or (legacy_user and sanitize_profile_name(legacy_user) == self.profile):
-                        target_file = legacy_file
-                    else:
+            # If default profile has no session, fall back to the primary profile session
+            if self.profile == "default":
+                primary = get_primary_profile()
+                if primary and primary != "default":
+                    primary_file = get_profile_paths(primary)["session_file"]
+                    if primary_file.exists():
+                        target_file = primary_file
+            if not target_file.exists():
+                # Fallback to legacy root session.json if migrating a single-user setup
+                legacy_file = SESSION_DIR / "session.json"
+                if legacy_file.exists():
+                    try:
+                        with open(legacy_file, "r", encoding="utf-8") as lf:
+                            legacy_data = json.load(lf)
+                        legacy_user = (legacy_data.get("user_profile") or {}).get("username", "")
+                        if self.profile in ("default", get_primary_profile()) or (legacy_user and sanitize_profile_name(legacy_user) in (self.profile, get_primary_profile())):
+                            target_file = legacy_file
+                        else:
+                            return False
+                    except Exception:
                         return False
-                except Exception:
+                else:
                     return False
-            else:
-                return False
         try:
             with open(target_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -258,9 +267,19 @@ class MoodleAuth:
                 allow_redirects=True,
                 timeout=15
             )
-            final_token_match = re.search(r'id="copytoclipboardtoken"[^>]*>([^<]+)</div>', reset_res.text, re.IGNORECASE)
+            final_token_match = re.search(r'id=["\']copytoclipboardtoken["\'][^>]*>([^<]+)', reset_res.text, re.IGNORECASE)
             if final_token_match:
-                return final_token_match.group(1).strip()
+                tok = final_token_match.group(1).strip()
+                m_hex = re.search(r"\b[a-f0-9]{32}\b", tok)
+                if m_hex:
+                    return m_hex.group(0)
+                if len(tok) == 32:
+                    return tok
+
+            # Fallback: search for any 32-char hex token in reset_res.text
+            hex_match = re.search(r"\b[a-f0-9]{32}\b", reset_res.text)
+            if hex_match:
+                return hex_match.group(0)
         except Exception as e:
             logger.warning(f"Failed to extract and reset mobile token: {e}")
         return None
@@ -287,57 +306,22 @@ class MoodleAuth:
         
         logger.info(f"Starting SSO session for user: {username[:2]}*** on {self.moodle_url}")
         
-        # 1. Access login page
-        login_url = f"{self.moodle_url}/login/index.php"
-        res1 = self.session.get(login_url, allow_redirects=True, timeout=15)
-        sso_url = res1.url
+        # 1. Access direct SAML SSO login endpoint and clear cookies for clean authentication
+        login_url = f"{self.moodle_url}/auth/saml2/login.php"
+        self.session.cookies.clear()
+        curr_res = self.session.get(login_url, allow_redirects=True, timeout=15)
+        sso_url = curr_res.url
 
-        # Check if already authenticated via valid session cookies
-        if (sso_url.rstrip("/") == self.moodle_url or "/my" in sso_url) and "nidp.tau.ac.il" not in sso_url:
-            sesskey_match = re.search(r'"sesskey":"([^"]+)"', res1.text)
-            if sesskey_match:
-                self.sesskey = sesskey_match.group(1)
-            token = self._extract_and_reset_mobile_token()
-            if token:
-                self.token = token
-                try:
-                    profile = self._fetch_site_info(self.token)
-                    self.user_profile = profile
-                    self.user_id = profile.get("userid")
-                except Exception:
-                    pass
-                self.auth_type = "sso"
-                self._save_session()
-                return {
-                    "success": True,
-                    "auth_type": "sso",
-                    "token_available": True,
-                    "user_id": self.user_id,
-                    "username": self.user_profile.get("username") if self.user_profile else username,
-                    "fullname": self.user_profile.get("fullname") if self.user_profile else username,
-                    "sitename": self.user_profile.get("sitename") if self.user_profile else "Moodle"
-                }
-
-        # Otherwise, clear cookies to guarantee a clean SSO redirect to nidp.tau.ac.il
-        if "nidp.tau.ac.il" not in sso_url:
-            self.session.cookies.clear()
-            res1 = self.session.get(login_url, allow_redirects=True, timeout=15)
-            sso_url = res1.url
-
-        if "/auth/saml2/login.php" in sso_url:
-            res_saml = self.session.get(sso_url, allow_redirects=True, timeout=15)
-            sso_url = res_saml.url
-
-        # Check for intermediate SAML form
-        form_match = re.search(r'<form[^>]+action=["\']([^"\']+)["\']', res1.text, re.IGNORECASE)
-        if form_match and "nidp.tau.ac.il" in res1.url:
+        # Check for intermediate SAML form on nidp
+        form_match = re.search(r'''<form[^>]+action=['"]([^'"]+)['"]''', curr_res.text, re.IGNORECASE)
+        if form_match and "nidp.tau.ac.il" in curr_res.url:
             action = form_match.group(1)
             if not action.startswith("http"):
                 action = requests.compat.urljoin("https://nidp.tau.ac.il", action)
-            inputs = dict(re.findall(r'<input[^>]+name=["\']([^"\']+)["\'][^>]+value=["\']([^"\']*)["\']', res1.text, re.IGNORECASE))
+            inputs = dict(re.findall(r'''<input[^>]+name=['"]([^'"]+)['"][^>]*value=['"]([^'"]*)['"]''', curr_res.text, re.IGNORECASE))
             sso_url = action
             if inputs:
-                self.session.post(action, data=inputs, timeout=15)
+                curr_res = self.session.post(action, data=inputs, timeout=15)
 
         # 2. Initiate login sequence
         self.session.post(
@@ -535,8 +519,13 @@ class MoodleAuth:
             except Exception as e:
                 logger.warning(f"Failed to auto-relogin with instance SSO credentials: {e}")
 
-        prof_prefix = f"{self.profile.upper()}_MOODLE" if self.profile != "default" else ""
-        prof_suffix = f"MOODLE_{self.profile.upper()}" if self.profile != "default" else ""
+        prof = self.profile
+        if prof == "default":
+            primary = get_primary_profile()
+            if not (os.getenv("MOODLE_USERNAME") or os.getenv("MOODLE_TOKEN") or os.getenv("MOODLE_SESSION_COOKIE")):
+                prof = primary
+        prof_prefix = f"{prof.upper()}_MOODLE" if prof != "default" else ""
+        prof_suffix = f"MOODLE_{prof.upper()}" if prof != "default" else ""
 
         # Check environment for direct token
         token = (

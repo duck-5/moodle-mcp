@@ -49,15 +49,35 @@ SCRAPE_PANOPTO = os.getenv("SCRAPE_PANOPTO", "0") in ("1", "true", "True")
 SESSION_DIR = Path(os.getenv("MOODLE_STORAGE_DIR", str(Path.home() / ".moodle_mcp")))
 PROFILES_DIR = SESSION_DIR / "profiles"
 
-# Active User Profile Name (defaults to MOODLE_PROFILE, then MOODLE_USERNAME, then 'default')
-MOODLE_PROFILE = os.getenv("MOODLE_PROFILE", MOODLE_USERNAME or "default").strip() or "default"
-
-
 def sanitize_profile_name(profile: Optional[str] = None) -> str:
     """Sanitizes a profile or username into a safe directory name."""
-    raw = (profile or os.getenv("MOODLE_PROFILE") or MOODLE_PROFILE or MOODLE_USERNAME or "default").strip()
+    raw = (profile or os.getenv("MOODLE_PROFILE") or MOODLE_USERNAME or "default").strip()
     sanitized = re.sub(r"[^a-zA-Z0-9_.-]", "_", raw)
     return sanitized or "default"
+
+
+# Active User Profile Name (defaults to MOODLE_PROFILE, then MOODLE_USERNAME, then primary configured profile)
+def get_primary_profile() -> str:
+    """Returns the primary configured profile name from MOODLE_PROFILES, MOODLE_PROFILE, or environment."""
+    env_prof = os.getenv("MOODLE_PROFILE", "").strip()
+    if env_prof and env_prof != "default":
+        return sanitize_profile_name(env_prof)
+    if MOODLE_USERNAME:
+        return sanitize_profile_name(MOODLE_USERNAME)
+    env_profiles = os.getenv("MOODLE_PROFILES", "")
+    if env_profiles:
+        for p in env_profiles.split(","):
+            p_clean = sanitize_profile_name(p.strip())
+            if p_clean and p_clean != "default":
+                return p_clean
+    for k in os.environ.keys():
+        if k.endswith("_MOODLE_USERNAME") and k != "MOODLE_USERNAME":
+            p_clean = sanitize_profile_name(k.replace("_MOODLE_USERNAME", "").lower())
+            if p_clean and p_clean != "default":
+                return p_clean
+    return "default"
+
+MOODLE_PROFILE = (os.getenv("MOODLE_PROFILE", MOODLE_USERNAME or get_primary_profile() or "default")).strip() or "default"
 
 
 def get_profile_dir(profile: Optional[str] = None) -> Path:

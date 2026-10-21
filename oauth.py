@@ -43,6 +43,9 @@ current_client_var: contextvars.ContextVar[Optional[MoodleClient]] = contextvars
     "current_moodle_client", default=None
 )
 
+# Global mapping of MCP session ID -> (timestamp, MoodleClient)
+SESSION_CLIENT_MAP: Dict[str, Tuple[float, MoodleClient]] = {}
+
 
 class ClientProxy:
     """
@@ -825,12 +828,15 @@ class BearerAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Extract Authorization header
+        # Extract Authorization and mcp-session-id headers
         auth_header = None
+        session_id = None
         for name, value in scope.get("headers", []):
-            if name.lower() == b"authorization":
+            lower_name = name.lower()
+            if lower_name == b"authorization":
                 auth_header = value.decode("latin1").strip()
-                break
+            elif lower_name == b"mcp-session-id":
+                session_id = value.decode("latin1").strip()
 
         client = None
         if auth_header and auth_header.lower().startswith("bearer "):
@@ -845,6 +851,8 @@ class BearerAuthMiddleware:
                 return
 
         if client is not None:
+            if session_id:
+                SESSION_CLIENT_MAP[session_id] = (time.time(), client)
             # Set request contextvar for dynamic client isolation
             ctx_token = current_client_var.set(client)
             try:
@@ -852,6 +860,18 @@ class BearerAuthMiddleware:
             finally:
                 current_client_var.reset(ctx_token)
             return
+
+        # Check if session_id is associated with an active client
+        if session_id and session_id in SESSION_CLIENT_MAP:
+            ts, s_client = SESSION_CLIENT_MAP[session_id]
+            if time.time() - ts < 86400:
+                SESSION_CLIENT_MAP[session_id] = (time.time(), s_client)
+                ctx_token = current_client_var.set(s_client)
+                try:
+                    await self.app(scope, receive, send)
+                finally:
+                    current_client_var.reset(ctx_token)
+                return
 
         # No Bearer token provided
         if self.require_auth:
