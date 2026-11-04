@@ -57,6 +57,24 @@ class TestClientLogic(unittest.TestCase):
         self.assertEqual(self.client.auth.moodle_url, "https://test.moodle.edu")
         self.assertIsNotNone(self.client.tz)
 
+    def test_get_assignments_none_extension_date(self):
+        # Verify that assignments with extensionduedate: None parse without TypeError
+        import unittest.mock as mock
+        with mock.patch.object(self.client, "_call_ws") as mock_ws, \
+             mock.patch.object(self.client, "get_enrolled_courses") as mock_courses:
+            mock_courses.return_value = [{"id": 101, "display_name": "Course 101"}]
+            mock_ws.side_effect = lambda fn, params: {
+                "courses": [{"id": 101, "assignments": [{"id": 55, "name": "HW", "duedate": 1794261540}]}]
+            } if fn == "mod_assign_get_assignments" else {
+                "lastattempt": {"submission": {"status": "new"}, "extensionduedate": None}
+            }
+
+            assigns = self.client.get_assignments(refresh=True)
+            self.assertEqual(len(assigns), 1)
+            self.assertEqual(assigns[0]["id"], 55)
+            self.assertEqual(assigns[0]["status"], "Assigned")
+            self.assertEqual(assigns[0]["deadline_timestamp"], 1794261540)
+
 
 if __name__ == "__main__":
     unittest.main()

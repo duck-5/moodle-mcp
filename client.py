@@ -300,12 +300,13 @@ class MoodleClient:
                         sub_dt = datetime.datetime.fromtimestamp(submission["timemodified"], self.tz)
                         submission_date = sub_dt.strftime("%Y-%m-%d %H:%M:%S")
                 
-                extension_ts = lastattempt.get("extensionduedate", 0)
+                raw_ext = lastattempt.get("extensionduedate")
+                extension_ts = raw_ext if isinstance(raw_ext, int) else 0
             except Exception as e:
                 logger.debug(f"Could not retrieve submission status for assign {assign_id}: {e}")
 
-            due_ts = assign.get("duedate", 0) if isinstance(assign.get("duedate"), int) else 0
-            cutoff_ts = assign.get("cutoffdate", 0) if isinstance(assign.get("cutoffdate"), int) else 0
+            due_ts = assign.get("duedate") if isinstance(assign.get("duedate"), int) else 0
+            cutoff_ts = assign.get("cutoffdate") if isinstance(assign.get("cutoffdate"), int) else 0
 
             final_deadline_ts = max(due_ts, cutoff_ts, extension_ts)
 
@@ -362,7 +363,7 @@ class MoodleClient:
                 "cutoff_date_timestamp": cutoff_ts,
                 "extension_date": extension_str,
                 "extension_date_timestamp": extension_ts,
-                "allows_late_submissions": bool(cutoff_ts > due_ts > 0),
+                "allows_late_submissions": bool(cutoff_ts and due_ts and cutoff_ts > due_ts > 0),
                 "opened": opened_str,
                 "moodle_link": moodle_link,
                 "instructions": intro_text,
@@ -379,13 +380,13 @@ class MoodleClient:
                 tasks.append((c_id, c_name, assign))
 
         if tasks:
-            with ThreadPoolExecutor(max_workers=min(len(tasks), 8)) as executor:
+            with ThreadPoolExecutor(max_workers=min(len(tasks), 16)) as executor:
                 futures = [executor.submit(process_assign, cid, cname, a) for cid, cname, a in tasks]
                 for future in as_completed(futures):
                     try:
                         results.append(future.result())
                     except Exception as e:
-                        logger.debug(f"Error processing assignment: {e}")
+                        logger.warning(f"Error processing assignment: {e}", exc_info=True)
 
 
         # Sort by deadline
@@ -393,7 +394,12 @@ class MoodleClient:
         self.cache.set(cache_key, results)
         return results
 
-    def get_upcoming_assignments(self, days_ahead: int = 7, refresh: bool = False) -> List[Dict[str, Any]]:
+    def get_upcoming_assignments(
+        self,
+        days_ahead: int = 7,
+        refresh: bool = False,
+        include_submitted: bool = False
+    ) -> List[Dict[str, Any]]:
         """Retrieves assignments due within the next N days."""
         all_assignments = self.get_assignments(refresh=refresh)
         now_dt = datetime.datetime.now(self.tz)
@@ -405,8 +411,9 @@ class MoodleClient:
             if not ts or ts == 0:
                 continue
             due_dt = datetime.datetime.fromtimestamp(ts, self.tz)
-            if now_dt <= due_dt <= cutoff_dt and a.get("status") != "Submitted":
-                upcoming.append(a)
+            if now_dt <= due_dt <= cutoff_dt:
+                if include_submitted or a.get("status") != "Submitted":
+                    upcoming.append(a)
 
         return upcoming
 
@@ -441,7 +448,7 @@ class MoodleClient:
             "grading_status": lastattempt.get("gradingstatus", "notgraded"),
             "can_submit": lastattempt.get("cansubmit", False),
             "can_edit": lastattempt.get("canedit", False),
-            "extension_due_date": lastattempt.get("extensionduedate", 0),
+            "extension_due_date": lastattempt.get("extensionduedate") if isinstance(lastattempt.get("extensionduedate"), int) else 0,
             "submitted_files": submitted_files,
             "feedback_grade": grade_val,
             "feedback_comments": feedback.get("plugins", [])
@@ -925,8 +932,10 @@ class MoodleClient:
         for q in quizzes_raw:
             cid = q.get("course")
             cname = course_names.get(cid, f"Course {cid}")
-            open_ts = q.get("timeopen", 0)
-            close_ts = q.get("timeclose", 0)
+            raw_open = q.get("timeopen")
+            open_ts = raw_open if isinstance(raw_open, int) else 0
+            raw_close = q.get("timeclose")
+            close_ts = raw_close if isinstance(raw_close, int) else 0
 
             open_str = ""
             if open_ts and open_ts > 0:
@@ -992,8 +1001,9 @@ class MoodleClient:
         for ev in events_raw:
             cid = ev.get("courseid")
             cname = course_names.get(cid, ev.get("course", {}).get("fullname", f"Course {cid}"))
-            ts = ev.get("timestart", 0)
-            ev_dt_str = datetime.datetime.fromtimestamp(ts, self.tz).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+            raw_ts = ev.get("timestart")
+            ts = raw_ts if isinstance(raw_ts, (int, float)) else 0
+            ev_dt_str = datetime.datetime.fromtimestamp(ts, self.tz).strftime("%Y-%m-%d %H:%M:%S") if ts and ts > 0 else ""
 
             desc_html = ev.get("description", "")
             desc_text = BeautifulSoup(desc_html, "html.parser").get_text(separator="\n").strip() if desc_html else ""

@@ -14,15 +14,21 @@ def register_assignments_tools(server: Any, client: MoodleClient) -> None:
     )
     def moodle_get_upcoming_assignments(
         days_ahead: int = 14,
-        refresh: bool = False
+        refresh: bool = False,
+        include_submitted: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Retrieves pending assignments due within the specified timeframe.
         Args:
             days_ahead: Number of days ahead (default: 14).
             refresh: If True, bypasses local cache.
+            include_submitted: If True, also includes completed/submitted assignments.
         """
-        return client.get_upcoming_assignments(days_ahead=days_ahead, refresh=refresh)
+        return client.get_upcoming_assignments(
+            days_ahead=days_ahead,
+            refresh=refresh,
+            include_submitted=include_submitted
+        )
 
     @server.tool(
         name="moodle_get_assignments",
