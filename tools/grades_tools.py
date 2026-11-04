@@ -8,20 +8,8 @@ from moodle_mcp.client import MoodleClient
 
 def register_grades_tools(server: Any, client: MoodleClient) -> None:
     @server.tool(
-        name="moodle_get_grades_summary",
-        description="Calculates current GPA and grade summaries across enrolled courses."
-    )
-    def moodle_get_grades_summary(refresh: bool = False) -> List[Dict[str, Any]]:
-        """
-        Calculates grade averages, graded assignments counts, and course totals.
-        Args:
-            refresh: If True, recalculates fresh grades from Moodle.
-        """
-        return client.get_grades_summary(refresh=refresh)
-
-    @server.tool(
         name="moodle_get_grades",
-        description="Retrieves itemized assignment and exam grades for a course or all courses."
+        description="Retrieves itemized assignment and exam grades, including Course Total standing, for a course or all courses."
     )
     def moodle_get_grades(
         course: Optional[Union[int, str]] = None,

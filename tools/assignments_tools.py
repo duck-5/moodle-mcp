@@ -31,30 +31,6 @@ def register_assignments_tools(server: Any, client: MoodleClient) -> None:
         )
 
     @server.tool(
-        name="moodle_get_assignments",
-        description="Retrieves assignments and true deadlines for a course or all courses."
-    )
-    def moodle_get_assignments(
-        course: Optional[Union[int, str]] = None,
-        course_id: Optional[int] = None,
-        status_filter: Optional[str] = None,
-        refresh: bool = False
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieves assignments with due dates and submission state.
-        Args:
-            course: Course ID or partial course name (optional).
-            course_id: Deprecated numeric course ID fallback.
-            status_filter: Filter by status ('Submitted', 'Assigned').
-            refresh: If True, fetches fresh assignments from Moodle.
-        """
-        cid = client.resolve_course_id(course if course is not None else course_id)
-        assignments = client.get_assignments(course_id=cid, refresh=refresh)
-        if status_filter:
-            assignments = [a for a in assignments if a.get("status", "").lower() == status_filter.lower()]
-        return assignments
-
-    @server.tool(
         name="moodle_get_assignment_status",
         description="Retrieves detailed submission status and grading feedback for an assignment."
     )

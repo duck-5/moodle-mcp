@@ -36,7 +36,6 @@ def register_all_tools(server: Any, client: MoodleClient, panopto: PanoptoManage
     register_grades_tools(server, client)
     register_files_tools(server, client)
     register_quizzes_tools(server, client)
-    register_calendar_tools(server, client)
     register_search_tools(server, client, panopto)
     register_forums_tools(server, client)
     register_participants_tools(server, client)
@@ -47,6 +46,7 @@ def register_all_tools(server: Any, client: MoodleClient, panopto: PanoptoManage
 
     # If full mode is requested, also expose individual legacy secondary tools
     if os.getenv("MOODLE_TOOLSET", "compact").lower() == "full":
+        register_calendar_tools(server, client)
         register_auth_tools(server, client)
         register_meetings_tools(server, client)
         register_recordings_tools(server, panopto)
