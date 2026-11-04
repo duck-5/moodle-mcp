@@ -58,6 +58,9 @@ class MoodleAuth:
             self.session_file = Path(os.getenv("MOODLE_SESSION_FILE", str(get_profile_paths(self.profile)["session_file"])))
         self.token: Optional[str] = None
         self.session: requests.Session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=32, pool_maxsize=32)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         self.session.headers.update({"User-Agent": USER_AGENT})
         self.sesskey: Optional[str] = None
         self.user_id: Optional[int] = None
