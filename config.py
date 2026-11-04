@@ -56,20 +56,20 @@ def sanitize_profile_name(profile: Optional[str] = None) -> str:
     return sanitized or "default"
 
 
-# Active User Profile Name (defaults to MOODLE_PROFILE, then MOODLE_USERNAME, then primary configured profile)
+# Active User Profile Name (defaults to MOODLE_PROFILE, then MOODLE_PROFILES, then MOODLE_USERNAME, then primary configured profile)
 def get_primary_profile() -> str:
-    """Returns the primary configured profile name from MOODLE_PROFILES, MOODLE_PROFILE, or environment."""
+    """Returns the primary configured profile name from MOODLE_PROFILE, MOODLE_PROFILES, or environment."""
     env_prof = os.getenv("MOODLE_PROFILE", "").strip()
     if env_prof and env_prof != "default":
         return sanitize_profile_name(env_prof)
-    if MOODLE_USERNAME:
-        return sanitize_profile_name(MOODLE_USERNAME)
     env_profiles = os.getenv("MOODLE_PROFILES", "")
     if env_profiles:
         for p in env_profiles.split(","):
             p_clean = sanitize_profile_name(p.strip())
             if p_clean and p_clean != "default":
                 return p_clean
+    if MOODLE_USERNAME:
+        return sanitize_profile_name(MOODLE_USERNAME)
     for k in os.environ.keys():
         if k.endswith("_MOODLE_USERNAME") and k != "MOODLE_USERNAME":
             p_clean = sanitize_profile_name(k.replace("_MOODLE_USERNAME", "").lower())
