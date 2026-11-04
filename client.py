@@ -954,6 +954,36 @@ class MoodleClient:
             intro_html = q.get("intro", "")
             intro_text = BeautifulSoup(intro_html, "html.parser").get_text(separator="\n").strip() if intro_html else ""
 
+            # Query attempts for this quiz to distinguish attempted vs unattempted
+            attempts_raw = []
+            try:
+                att_res = self._call_ws("mod_quiz_get_user_attempts", {"quizid": q.get("id")})
+                if isinstance(att_res, dict):
+                    attempts_raw = att_res.get("attempts", [])
+            except Exception:
+                pass
+
+            finished_attempts = [a for a in attempts_raw if a.get("state") == "finished"]
+            is_completed = len(finished_attempts) > 0
+
+            # Determine actual user grade
+            user_grade = None
+            if is_completed:
+                try:
+                    best_res = self._call_ws("mod_quiz_get_user_best_grade", {"quizid": q.get("id")})
+                    if isinstance(best_res, dict) and best_res.get("hasgrade") and best_res.get("grade") is not None:
+                        user_grade = best_res.get("grade")
+                except Exception:
+                    pass
+                if user_grade is None:
+                    for a in reversed(finished_attempts):
+                        if a.get("sumgrades") is not None:
+                            user_grade = a.get("sumgrades")
+                            break
+
+            raw_max_grade = q.get("grade", 0)
+            max_grade = float(raw_max_grade) if raw_max_grade is not None else 0.0
+
             quizzes.append({
                 "id": q.get("id"),
                 "course_id": cid,
@@ -966,7 +996,10 @@ class MoodleClient:
                 "time_close_timestamp": close_ts,
                 "time_limit_minutes": round(q.get("timelimit", 0) / 60, 1) if q.get("timelimit") else None,
                 "attempts_allowed": q.get("attempts", 0),
-                "grade": q.get("grade", 0),
+                "attempts_count": len(attempts_raw),
+                "is_completed": is_completed,
+                "grade": user_grade,
+                "max_grade": max_grade,
                 "is_active": is_active,
                 "is_closed": is_closed
             })
@@ -1057,13 +1090,17 @@ class MoodleClient:
                 cid = forum.get("course")
                 cname = course_names.get(cid, f"Course {cid}")
                 try:
-                    disc_data = self._call_ws("mod_forum_get_forum_discussions_paginated", {
-                        "forumid": fid,
-                        "sortby": "timemodified",
-                        "sortdirection": "DESC",
-                        "page": 0,
-                        "perpage": 5
-                    })
+                    disc_data = {}
+                    try:
+                        disc_data = self._call_ws("mod_forum_get_forum_discussions", {"forumid": fid})
+                    except Exception:
+                        disc_data = self._call_ws("mod_forum_get_forum_discussions_paginated", {
+                            "forumid": fid,
+                            "sortby": "timemodified",
+                            "sortdirection": "DESC",
+                            "page": 0,
+                            "perpage": 5
+                        })
                     for d in disc_data.get("discussions", []):
                         ts = d.get("timemodified", 0)
                         post_dt = datetime.datetime.fromtimestamp(ts, self.tz).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
@@ -1086,6 +1123,43 @@ class MoodleClient:
 
         all_announcements.sort(key=lambda x: x.get("timestamp") or 0, reverse=True)
         return all_announcements
+
+    def get_forum_discussion_posts(self, discussion_id: int) -> List[Dict[str, Any]]:
+        """
+        Retrieves all posts and replies in a forum discussion thread.
+        """
+        try:
+            data = self._call_ws("mod_forum_get_discussion_posts", {"discussionid": discussion_id})
+        except Exception as e:
+            logger.debug(f"mod_forum_get_discussion_posts failed for discussion {discussion_id}: {e}")
+            return []
+
+        posts_raw = data.get("posts", []) if isinstance(data, dict) else []
+        posts = []
+        for p in posts_raw:
+            ts = p.get("created", p.get("modified", 0))
+            post_dt = datetime.datetime.fromtimestamp(ts, self.tz).strftime("%Y-%m-%d %H:%M:%S") if ts else ""
+            msg_html = p.get("message", "")
+            msg_text = BeautifulSoup(msg_html, "html.parser").get_text(separator="\n").strip() if msg_html else ""
+            posts.append({
+                "id": p.get("id"),
+                "discussion_id": discussion_id,
+                "subject": p.get("subject", ""),
+                "author": p.get("userfullname") or p.get("author", {}).get("fullname", ""),
+                "date": post_dt,
+                "timestamp": ts,
+                "message": msg_text,
+                "has_parent": bool(p.get("parent", 0)),
+                "attachments": [
+                    {
+                        "filename": att.get("filename"),
+                        "fileurl": att.get("fileurl"),
+                        "filesize": att.get("filesize")
+                    }
+                    for att in p.get("attachments", [])
+                ]
+            })
+        return posts
 
     def get_course_participants(self, course_id: int) -> List[Dict[str, Any]]:
         """

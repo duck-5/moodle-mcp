@@ -29,7 +29,7 @@ from moodle_mcp.tools.storage_tools import register_storage_tools
 
 def register_all_tools(server: Any, client: MoodleClient, panopto: PanoptoManager) -> None:
     """Registers Moodle MCP tools onto the given server."""
-    # Core high-frequency tools
+    # Core focused tools
     register_dashboard_tools(server, client)
     register_courses_tools(server, client)
     register_assignments_tools(server, client)
@@ -38,15 +38,16 @@ def register_all_tools(server: Any, client: MoodleClient, panopto: PanoptoManage
     register_quizzes_tools(server, client)
     register_calendar_tools(server, client)
     register_search_tools(server, client, panopto)
+    register_forums_tools(server, client)
+    register_participants_tools(server, client)
 
-    # Consolidated additional tools dispatcher (announcements, participants, meetings, recordings, downloads, storage, cache, etc.)
-    register_additional_tools(server, client, panopto)
+    # Legacy monolithic dispatcher tool is only registered if explicitly requested
+    if os.getenv("MOODLE_ENABLE_MONOLITH_TOOL", "0") == "1":
+        register_additional_tools(server, client, panopto)
 
-    # If full mode is requested, also expose individual legacy tools
+    # If full mode is requested, also expose individual legacy secondary tools
     if os.getenv("MOODLE_TOOLSET", "compact").lower() == "full":
         register_auth_tools(server, client)
         register_meetings_tools(server, client)
         register_recordings_tools(server, panopto)
-        register_forums_tools(server, client)
-        register_participants_tools(server, client)
         register_storage_tools(server, client)

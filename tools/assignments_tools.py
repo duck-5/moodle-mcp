@@ -66,7 +66,32 @@ def register_assignments_tools(server: Any, client: MoodleClient) -> None:
         """
         return client.get_assignment_status(assignment_id)
 
-    # In full toolset mode, also expose direct submission tool
+    @server.tool(
+        name="moodle_upload_submission",
+        description="Uploads a solution file (e.g. PDF or code) as a draft submission for an assignment."
+    )
+    def moodle_upload_submission(
+        assignment_id: int,
+        file_path: str,
+        filename: Optional[str] = None,
+        submit_for_grading: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Uploads a solution file as a submission. By default saves as draft (submit_for_grading=False).
+        Args:
+            assignment_id: The Moodle assignment ID.
+            file_path: Local filesystem path to the file to submit.
+            filename: Optional custom filename to display in Moodle.
+            submit_for_grading: If True, locks and submits for final grading. Defaults to False (Draft).
+        """
+        return client.submit_assignment(
+            assign_id=assignment_id,
+            file_path_or_bytes=file_path,
+            filename=filename,
+            submit_for_grading=submit_for_grading
+        )
+
+    # In full toolset mode, also expose direct submission tool alias
     if os.getenv("MOODLE_TOOLSET", "compact").lower() == "full":
         @server.tool(
             name="moodle_submit_assignment",
