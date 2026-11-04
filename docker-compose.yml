@@ -10,7 +10,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: moodle-mcp
-    restart: unless-stopped
+    restart: "no"
     security_opt:
       - no-new-privileges:true
     env_file:

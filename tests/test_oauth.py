@@ -41,6 +41,29 @@ class TestOAuthComponents(unittest.TestCase):
         decrypted = self.tm.decrypt_payload(encrypted)
         self.assertEqual(decrypted, payload)
 
+    def test_multifernet_fallback_keys(self):
+        from cryptography.fernet import Fernet
+        key1 = Fernet.generate_key().decode("utf-8")
+        key2 = Fernet.generate_key().decode("utf-8")
+
+        tm_old = TokenManager(secret_key=key2)
+        payload = {"user": "rotating_user", "id": 54321}
+        token_from_old_key = tm_old.encrypt_payload(payload)
+
+        # Primary is key1, fallback is key2
+        os.environ["MOODLE_FALLBACK_SECRET_KEYS"] = key2
+        try:
+            tm_new = TokenManager(secret_key=key1)
+            # Decrypts token issued under key2 successfully
+            decrypted = tm_new.decrypt_payload(token_from_old_key)
+            self.assertEqual(decrypted, payload)
+
+            # New tokens encrypted by tm_new use key1
+            token_new = tm_new.encrypt_payload(payload)
+            self.assertEqual(tm_new.decrypt_payload(token_new), payload)
+        finally:
+            os.environ.pop("MOODLE_FALLBACK_SECRET_KEYS", None)
+
     def test_pkce_s256_verification(self):
         verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
         digest = hashlib.sha256(verifier.encode("ascii")).digest()

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse, parse_qs
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
 import requests
 from starlette.requests import Request
 from starlette.responses import JSONResponse, HTMLResponse, RedirectResponse, Response
@@ -83,24 +83,54 @@ class TokenManager:
     """
 
     def __init__(self, secret_key: Optional[str] = None):
-        self.secret_key = secret_key or os.getenv("MOODLE_SECRET_KEY")
-        if not self.secret_key:
-            key_file = SESSION_DIR / "oauth_secret.key"
-            if key_file.exists():
-                try:
-                    self.secret_key = key_file.read_text(encoding="utf-8").strip()
-                except Exception:
-                    self.secret_key = None
-            if not self.secret_key:
-                new_key = Fernet.generate_key().decode("utf-8")
-                self.secret_key = new_key
-                try:
-                    SESSION_DIR.mkdir(parents=True, exist_ok=True)
-                    key_file.write_text(new_key, encoding="utf-8")
-                except Exception as e:
-                    logger.warning(f"Could not persist oauth_secret.key: {e}")
+        candidate_keys = []
 
-        self._fernet = Fernet(self.secret_key.encode("utf-8"))
+        # 1. Primary key: explicitly passed parameter or MOODLE_SECRET_KEY env
+        primary = secret_key or os.getenv("MOODLE_SECRET_KEY")
+        if primary:
+            candidate_keys.append(primary.strip())
+
+        # 2. Key ring / fallback keys from MOODLE_FALLBACK_SECRET_KEYS env (comma-separated)
+        fallback_env = os.getenv("MOODLE_FALLBACK_SECRET_KEYS", "")
+        if fallback_env:
+            for k in fallback_env.split(","):
+                k = k.strip()
+                if k and k not in candidate_keys:
+                    candidate_keys.append(k)
+
+        # 3. Key file in SESSION_DIR
+        key_file = SESSION_DIR / "oauth_secret.key"
+        if key_file.exists():
+            try:
+                k = key_file.read_text(encoding="utf-8").strip()
+                if k and k not in candidate_keys:
+                    candidate_keys.append(k)
+            except Exception:
+                pass
+
+        # 4. Check root or home key fallback if exists and distinct
+        for candidate_path in [Path("/root/.moodle_mcp/oauth_secret.key"), Path.home() / ".moodle_mcp" / "oauth_secret.key"]:
+            if candidate_path.exists() and candidate_path != key_file:
+                try:
+                    k = candidate_path.read_text(encoding="utf-8").strip()
+                    if k and k not in candidate_keys:
+                        candidate_keys.append(k)
+                except Exception:
+                    pass
+
+        # 5. If no key exists anywhere, generate a new one and persist it
+        if not candidate_keys:
+            new_key = Fernet.generate_key().decode("utf-8")
+            candidate_keys.append(new_key)
+            try:
+                SESSION_DIR.mkdir(parents=True, exist_ok=True)
+                key_file.write_text(new_key, encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"Could not persist oauth_secret.key: {e}")
+
+        self.secret_key = candidate_keys[0]
+        self.fallback_keys = candidate_keys[1:]
+        self._fernet = MultiFernet([Fernet(k.encode("utf-8")) for k in candidate_keys])
         self._auth_codes: Dict[str, Dict[str, Any]] = {}
         self._active_clients: Dict[str, Tuple[float, MoodleClient]] = {}
 
