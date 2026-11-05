@@ -883,6 +883,12 @@ class BearerAuthMiddleware:
         if client is not None:
             if session_id:
                 SESSION_CLIENT_MAP[session_id] = (time.time(), client)
+                # Periodically prune expired session mappings to prevent unbounded growth
+                if len(SESSION_CLIENT_MAP) > 100:
+                    now_t = time.time()
+                    expired = [k for k, (ts, _) in SESSION_CLIENT_MAP.items() if now_t - ts > 86400]
+                    for k in expired:
+                        SESSION_CLIENT_MAP.pop(k, None)
             # Set request contextvar for dynamic client isolation
             ctx_token = current_client_var.set(client)
             try:

@@ -931,7 +931,7 @@ class MoodleClient:
         now_dt = datetime.datetime.now(self.tz)
         quizzes = []
 
-        for q in quizzes_raw:
+        def process_single_quiz(q: Dict[str, Any]) -> Dict[str, Any]:
             cid = q.get("course")
             cname = course_names.get(cid, f"Course {cid}")
             raw_open = q.get("timeopen")
@@ -986,7 +986,7 @@ class MoodleClient:
             raw_max_grade = q.get("grade", 0)
             max_grade = float(raw_max_grade) if raw_max_grade is not None else 0.0
 
-            quizzes.append({
+            return {
                 "id": q.get("id"),
                 "course_id": cid,
                 "course_name": cname,
@@ -1004,7 +1004,18 @@ class MoodleClient:
                 "max_grade": max_grade,
                 "is_active": is_active,
                 "is_closed": is_closed
-            })
+            }
+
+        if quizzes_raw:
+            with ThreadPoolExecutor(max_workers=min(len(quizzes_raw), 12)) as executor:
+                futures = [executor.submit(process_single_quiz, q) for q in quizzes_raw]
+                for future in as_completed(futures):
+                    try:
+                        quizzes.append(future.result())
+                    except Exception as e:
+                        logger.debug(f"Error processing quiz: {e}")
+
+            quizzes.sort(key=lambda x: x.get("time_close_timestamp") or 0)
 
         return quizzes
 
