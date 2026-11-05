@@ -829,6 +829,8 @@ class MoodleClient:
 
         truncated = len(extracted_text) > max_chars
         preview = extracted_text[:max_chars]
+        if truncated:
+            preview += f"\n\n[TRUNCATED: Showing {max_chars} of {len(extracted_text)} characters. Increase max_chars parameter to view more]"
 
         return {
             "url": file_url,

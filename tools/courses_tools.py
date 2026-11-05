@@ -3,7 +3,7 @@ Course discovery and course contents MCP tools.
 """
 
 from typing import Any, Dict, List, Optional, Union
-from moodle_mcp.client import MoodleClient
+from moodle_mcp.client import MoodleClient, MoodleClientError
 
 
 def register_courses_tools(server: Any, client: MoodleClient) -> None:
@@ -48,5 +48,5 @@ def register_courses_tools(server: Any, client: MoodleClient) -> None:
         """
         cid = client.resolve_course_id(course if course is not None else course_id)
         if not cid:
-            return {"error": f"Course '{course or course_id}' could not be found."}
+            raise MoodleClientError(f"Course '{course or course_id}' could not be found in enrolled courses.")
         return client.get_course_contents(cid, refresh=refresh)
